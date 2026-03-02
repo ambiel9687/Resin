@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -60,6 +61,127 @@ func TestSingboxBuilder_ParseShadowsocks(t *testing.T) {
 	}
 	if err := closer.Close(); err != nil {
 		t.Fatalf("outbound Close() error: %v", err)
+	}
+}
+
+func TestSingboxBuilder_ParseExtendedProtocols(t *testing.T) {
+	b, err := NewSingboxBuilder()
+	if err != nil {
+		t.Fatalf("NewSingboxBuilder() error: %v", err)
+	}
+	defer b.Close()
+
+	cases := []struct {
+		name               string
+		raw                json.RawMessage
+		missingFeatureHint string
+	}{
+		{
+			name: "socks",
+			raw: json.RawMessage(`{
+				"type":"socks",
+				"tag":"test-socks",
+				"server":"127.0.0.1",
+				"server_port":1080,
+				"version":"5",
+				"username":"user",
+				"password":"pass"
+			}`),
+		},
+		{
+			name: "http",
+			raw: json.RawMessage(`{
+				"type":"http",
+				"tag":"test-http",
+				"server":"127.0.0.1",
+				"server_port":8080,
+				"username":"user",
+				"password":"pass"
+			}`),
+		},
+		{
+			name: "wireguard",
+			raw: json.RawMessage(`{
+				"type":"wireguard",
+				"tag":"test-wg",
+				"server":"127.0.0.1",
+				"server_port":2480,
+				"local_address":["172.16.0.2/32","fd01::1/128"],
+				"private_key":"eCtXsJZ27+4PbhDkHnB923tkUn2Gj59wZw5wFA75MnU=",
+				"peer_public_key":"Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo="
+			}`),
+			missingFeatureHint: "WireGuard is not included in this build",
+		},
+		{
+			name: "hysteria",
+			raw: json.RawMessage(`{
+				"type":"hysteria",
+				"tag":"test-hysteria",
+				"server":"127.0.0.1",
+				"server_port":443,
+				"auth_str":"password",
+				"up_mbps":30,
+				"down_mbps":200,
+				"tls":{"enabled":true,"insecure":true,"server_name":"example.com"}
+			}`),
+			missingFeatureHint: "QUIC is not included in this build",
+		},
+		{
+			name: "tuic",
+			raw: json.RawMessage(`{
+				"type":"tuic",
+				"tag":"test-tuic",
+				"server":"127.0.0.1",
+				"server_port":443,
+				"uuid":"00000000-0000-0000-0000-000000000001",
+				"password":"password",
+				"tls":{"enabled":true,"insecure":true,"server_name":"example.com"}
+			}`),
+			missingFeatureHint: "QUIC is not included in this build",
+		},
+		{
+			name: "anytls",
+			raw: json.RawMessage(`{
+				"type":"anytls",
+				"tag":"test-anytls",
+				"server":"127.0.0.1",
+				"server_port":443,
+				"password":"password",
+				"tls":{"enabled":true,"insecure":true,"server_name":"example.com"}
+			}`),
+		},
+		{
+			name: "ssh",
+			raw: json.RawMessage(`{
+				"type":"ssh",
+				"tag":"test-ssh",
+				"server":"127.0.0.1",
+				"server_port":22,
+				"user":"root",
+				"password":"password"
+			}`),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ob, err := b.Build(tc.raw)
+			if err != nil {
+				if tc.missingFeatureHint != "" && strings.Contains(err.Error(), tc.missingFeatureHint) {
+					t.Skipf("skipping %s: %v", tc.name, err)
+					return
+				}
+				t.Fatalf("Build(%s) error: %v", tc.name, err)
+			}
+			if ob == nil {
+				t.Fatalf("Build(%s) returned nil outbound", tc.name)
+			}
+			if closer, ok := ob.(io.Closer); ok {
+				if err := closer.Close(); err != nil {
+					t.Fatalf("Build(%s) outbound Close() error: %v", tc.name, err)
+				}
+			}
+		})
 	}
 }
 

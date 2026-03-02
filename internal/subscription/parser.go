@@ -344,9 +344,451 @@ func convertClashProxyToNode(proxy map[string]any) (ParsedNode, bool) {
 			"tls":         tls,
 		}
 		return buildParsedNode(outbound)
+	case "socks", "socks4", "socks4a", "socks5":
+		outbound := map[string]any{
+			"type":        "socks",
+			"tag":         defaultTag(tag, "socks", server, port),
+			"server":      server,
+			"server_port": port,
+		}
+		if version := clashSOCKSVersion(nodeType, proxy); version != "" {
+			outbound["version"] = version
+		}
+		if username := strings.TrimSpace(getString(proxy, "username")); username != "" {
+			outbound["username"] = username
+		}
+		if password := strings.TrimSpace(getString(proxy, "password")); password != "" {
+			outbound["password"] = password
+		}
+		if udp, ok := getBool(proxy, "udp"); ok && !udp {
+			outbound["network"] = "tcp"
+		}
+		applyClashDialFields(outbound, proxy)
+		return buildParsedNode(outbound)
+	case "http":
+		outbound := map[string]any{
+			"type":        "http",
+			"tag":         defaultTag(tag, "http", server, port),
+			"server":      server,
+			"server_port": port,
+		}
+		if username := strings.TrimSpace(getString(proxy, "username")); username != "" {
+			outbound["username"] = username
+		}
+		if password := strings.TrimSpace(getString(proxy, "password")); password != "" {
+			outbound["password"] = password
+		}
+		if headers, ok := getMap(proxy, "headers"); ok && len(headers) > 0 {
+			outbound["headers"] = headers
+		}
+		sni := strings.TrimSpace(firstNonEmpty(
+			getString(proxy, "sni"),
+			getString(proxy, "servername"),
+			getString(proxy, "server-name"),
+		))
+		skipVerify, hasSkipVerify := getBool(proxy, "skip-cert-verify", "allowInsecure", "insecure")
+		tlsEnabled := false
+		if tls, ok := getBool(proxy, "tls"); ok && tls {
+			tlsEnabled = true
+		}
+		if sni != "" || hasSkipVerify {
+			tlsEnabled = true
+		}
+		if tlsEnabled {
+			tls := newClashEnabledTLS(sni, hasSkipVerify && skipVerify, nil)
+			outbound["tls"] = tls
+		}
+		applyClashDialFields(outbound, proxy)
+		return buildParsedNode(outbound)
+	case "wireguard", "wg":
+		privateKey := strings.TrimSpace(getString(proxy, "private-key", "private_key"))
+		publicKey := strings.TrimSpace(getString(proxy, "public-key", "public_key"))
+		localAddress := parseWireGuardLocalAddress(proxy)
+		allowedIPs := parseWireGuardAllowedIPs(proxy)
+		if privateKey == "" || publicKey == "" || len(localAddress) == 0 || len(allowedIPs) == 0 {
+			return ParsedNode{}, false
+		}
+		outbound := map[string]any{
+			"type":            "wireguard",
+			"tag":             defaultTag(tag, "wireguard", server, port),
+			"server":          server,
+			"server_port":     port,
+			"private_key":     privateKey,
+			"peer_public_key": publicKey,
+			"local_address":   localAddress,
+		}
+		peer := map[string]any{
+			"server":      server,
+			"server_port": port,
+			"public_key":  publicKey,
+			"allowed_ips": allowedIPs,
+		}
+		if preSharedKey := strings.TrimSpace(getString(proxy, "pre-shared-key", "pre_shared_key")); preSharedKey != "" {
+			outbound["pre_shared_key"] = preSharedKey
+			peer["pre_shared_key"] = preSharedKey
+		}
+		if reserved, ok := getUint8Array(proxy, "reserved"); ok && len(reserved) == 3 {
+			outbound["reserved"] = reserved
+			peer["reserved"] = reserved
+		}
+		outbound["peers"] = []map[string]any{peer}
+		if mtu, ok := getUint(proxy, "mtu"); ok {
+			outbound["mtu"] = mtu
+		}
+		if udp, ok := getBool(proxy, "udp"); ok && !udp {
+			outbound["network"] = "tcp"
+		}
+		applyClashDialFields(outbound, proxy)
+		return buildParsedNode(outbound)
+	case "hysteria":
+		authString := strings.TrimSpace(firstNonEmpty(
+			getString(proxy, "auth-str", "auth_str"),
+			getString(proxy, "auth"),
+		))
+		if authString == "" {
+			return ParsedNode{}, false
+		}
+		up := normalizeHysteriaRate(getString(proxy, "up"))
+		down := normalizeHysteriaRate(getString(proxy, "down"))
+		if up == "" || down == "" {
+			return ParsedNode{}, false
+		}
+		sni := strings.TrimSpace(firstNonEmpty(
+			getString(proxy, "sni"),
+			getString(proxy, "servername"),
+			getString(proxy, "server-name"),
+		))
+		insecure, _ := getBool(proxy, "skip-cert-verify", "allowInsecure", "insecure")
+		tls := newClashEnabledTLS(sni, insecure, getStringSlice(proxy, "alpn"))
+		outbound := map[string]any{
+			"type":        "hysteria",
+			"tag":         defaultTag(tag, "hysteria", server, port),
+			"server":      server,
+			"server_port": port,
+			"auth_str":    authString,
+			"up":          up,
+			"down":        down,
+			"tls":         tls,
+		}
+		if obfs := strings.TrimSpace(getString(proxy, "obfs")); obfs != "" {
+			outbound["obfs"] = obfs
+		}
+		if ports := splitCommaList(getString(proxy, "ports")); len(ports) > 0 {
+			outbound["server_ports"] = ports
+		}
+		if recvWindowConn, ok := getUint(proxy, "recv-window-conn", "recv_window_conn"); ok {
+			outbound["recv_window_conn"] = recvWindowConn
+		}
+		if recvWindow, ok := getUint(proxy, "recv-window", "recv_window"); ok {
+			outbound["recv_window"] = recvWindow
+		}
+		if disableMTUDiscovery, ok := getBool(proxy, "disable_mtu_discovery"); ok {
+			outbound["disable_mtu_discovery"] = disableMTUDiscovery
+		}
+		if strings.EqualFold(strings.TrimSpace(getString(proxy, "protocol")), "udp") {
+			outbound["network"] = "udp"
+		}
+		applyClashDialFields(outbound, proxy)
+		return buildParsedNode(outbound)
+	case "tuic":
+		uuid := strings.TrimSpace(getString(proxy, "uuid"))
+		if uuid == "" {
+			return ParsedNode{}, false
+		}
+		sni := strings.TrimSpace(firstNonEmpty(
+			getString(proxy, "sni"),
+			getString(proxy, "servername"),
+			getString(proxy, "server-name"),
+		))
+		insecure, _ := getBool(proxy, "skip-cert-verify", "allowInsecure", "insecure")
+		tls := newClashEnabledTLS(sni, insecure, getStringSlice(proxy, "alpn"))
+		if disableSNI, ok := getBool(proxy, "disable-sni", "disable_sni"); ok && disableSNI {
+			tls["disable_sni"] = true
+		}
+		outbound := map[string]any{
+			"type":        "tuic",
+			"tag":         defaultTag(tag, "tuic", server, port),
+			"server":      server,
+			"server_port": port,
+			"uuid":        uuid,
+			"tls":         tls,
+		}
+		if password := strings.TrimSpace(getString(proxy, "password")); password != "" {
+			outbound["password"] = password
+		}
+		if congestionControl := strings.TrimSpace(getString(proxy, "congestion-controller", "congestion_control")); congestionControl != "" {
+			outbound["congestion_control"] = congestionControl
+		}
+		if udpRelayMode := strings.TrimSpace(getString(proxy, "udp-relay-mode", "udp_relay_mode")); udpRelayMode != "" {
+			outbound["udp_relay_mode"] = udpRelayMode
+		}
+		if zeroRTT, ok := getBool(proxy, "reduce-rtt", "zero-rtt-handshake", "zero_rtt_handshake"); ok {
+			outbound["zero_rtt_handshake"] = zeroRTT
+		}
+		if heartbeat, ok := getDurationString(proxy, "ms", "heartbeat-interval", "heartbeat_interval", "heartbeat"); ok {
+			outbound["heartbeat"] = heartbeat
+		}
+		applyClashDialFields(outbound, proxy)
+		return buildParsedNode(outbound)
+	case "anytls":
+		password := strings.TrimSpace(getString(proxy, "password"))
+		if password == "" {
+			return ParsedNode{}, false
+		}
+		sni := strings.TrimSpace(firstNonEmpty(
+			getString(proxy, "sni"),
+			getString(proxy, "servername"),
+			getString(proxy, "server-name"),
+		))
+		insecure, _ := getBool(proxy, "skip-cert-verify", "allowInsecure", "insecure")
+		tls := newClashEnabledTLS(sni, insecure, getStringSlice(proxy, "alpn"))
+		if fingerprint := strings.TrimSpace(getString(proxy, "client-fingerprint", "client_fingerprint")); fingerprint != "" {
+			tls["utls"] = map[string]any{
+				"enabled":     true,
+				"fingerprint": fingerprint,
+			}
+		}
+		outbound := map[string]any{
+			"type":        "anytls",
+			"tag":         defaultTag(tag, "anytls", server, port),
+			"server":      server,
+			"server_port": port,
+			"password":    password,
+			"tls":         tls,
+		}
+		if interval, ok := getDurationString(proxy, "s", "idle-session-check-interval", "idle_session_check_interval"); ok {
+			outbound["idle_session_check_interval"] = interval
+		}
+		if timeout, ok := getDurationString(proxy, "s", "idle-session-timeout", "idle_session_timeout"); ok {
+			outbound["idle_session_timeout"] = timeout
+		}
+		if minIdle, ok := getUint(proxy, "min-idle-session", "min_idle_session"); ok {
+			outbound["min_idle_session"] = minIdle
+		}
+		applyClashDialFields(outbound, proxy)
+		return buildParsedNode(outbound)
+	case "ssh":
+		outbound := map[string]any{
+			"type":        "ssh",
+			"tag":         defaultTag(tag, "ssh", server, port),
+			"server":      server,
+			"server_port": port,
+		}
+		if user := strings.TrimSpace(firstNonEmpty(getString(proxy, "username"), getString(proxy, "user"))); user != "" {
+			outbound["user"] = user
+		}
+		if password := strings.TrimSpace(getString(proxy, "password")); password != "" {
+			outbound["password"] = password
+		}
+		if privateKey := strings.TrimSpace(getString(proxy, "private-key", "private_key")); privateKey != "" {
+			outbound["private_key"] = privateKey
+		}
+		if passphrase := strings.TrimSpace(getString(proxy, "private-key-passphrase", "private_key_passphrase")); passphrase != "" {
+			outbound["private_key_passphrase"] = passphrase
+		}
+		if hostKey := getStringList(proxy, "host-key", "host_key"); len(hostKey) > 0 {
+			outbound["host_key"] = hostKey
+		}
+		if hostKeyAlgorithms := getStringList(proxy, "host-key-algorithms", "host_key_algorithms"); len(hostKeyAlgorithms) > 0 {
+			outbound["host_key_algorithms"] = hostKeyAlgorithms
+		}
+		if clientVersion := strings.TrimSpace(getString(proxy, "client-version", "client_version")); clientVersion != "" {
+			outbound["client_version"] = clientVersion
+		}
+		applyClashDialFields(outbound, proxy)
+		return buildParsedNode(outbound)
 	default:
 		return ParsedNode{}, false
 	}
+}
+
+func clashSOCKSVersion(nodeType string, proxy map[string]any) string {
+	switch nodeType {
+	case "socks4":
+		return "4"
+	case "socks4a":
+		return "4a"
+	case "socks5":
+		return "5"
+	}
+	version := strings.TrimSpace(strings.ToLower(getString(proxy, "version")))
+	switch version {
+	case "4", "4a", "5":
+		return version
+	default:
+		return ""
+	}
+}
+
+func parseWireGuardLocalAddress(proxy map[string]any) []string {
+	var addresses []string
+	for _, key := range []string{"ip", "ipv6"} {
+		for _, raw := range getStringList(proxy, key) {
+			if normalized, ok := normalizeWireGuardPrefix(raw); ok {
+				addresses = append(addresses, normalized)
+			}
+		}
+	}
+	return addresses
+}
+
+func parseWireGuardAllowedIPs(proxy map[string]any) []string {
+	var allowedIPs []string
+	for _, raw := range getStringList(proxy, "allowed-ips", "allowed_ips") {
+		if _, _, err := net.ParseCIDR(raw); err == nil {
+			allowedIPs = append(allowedIPs, raw)
+		}
+	}
+	return allowedIPs
+}
+
+func normalizeWireGuardPrefix(raw string) (string, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", false
+	}
+	if _, _, err := net.ParseCIDR(value); err == nil {
+		return value, true
+	}
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return "", false
+	}
+	if ip.To4() != nil {
+		return ip.String() + "/32", true
+	}
+	return ip.String() + "/128", true
+}
+
+func newClashEnabledTLS(serverName string, insecure bool, alpn []string) map[string]any {
+	tls := map[string]any{
+		"enabled": true,
+	}
+	if serverName = strings.TrimSpace(serverName); serverName != "" {
+		tls["server_name"] = serverName
+	}
+	if insecure {
+		tls["insecure"] = true
+	}
+	if len(alpn) > 0 {
+		tls["alpn"] = alpn
+	}
+	return tls
+}
+
+func splitCommaList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	items := strings.Split(raw, ",")
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func normalizeHysteriaRate(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if hasLetter(value) {
+		return value
+	}
+	if _, err := strconv.ParseFloat(value, 64); err == nil {
+		return value + " Mbps"
+	}
+	return value
+}
+
+func applyClashDialFields(outbound map[string]any, proxy map[string]any) {
+	if detour := strings.TrimSpace(getString(proxy, "dialer-proxy", "dialer_proxy")); detour != "" {
+		outbound["detour"] = detour
+	}
+	if bindInterface := strings.TrimSpace(firstNonEmpty(
+		getString(proxy, "bind-interface"),
+		getString(proxy, "bind_interface"),
+		getString(proxy, "interface-name"),
+		getString(proxy, "interface_name"),
+	)); bindInterface != "" {
+		outbound["bind_interface"] = bindInterface
+	}
+	if routingMark, ok := getUint(proxy, "routing-mark", "routing_mark"); ok {
+		outbound["routing_mark"] = routingMark
+	} else if markText := strings.TrimSpace(getString(proxy, "routing-mark", "routing_mark")); markText != "" {
+		outbound["routing_mark"] = markText
+	}
+	if tcpFastOpen, ok := getBool(proxy, "fast-open", "fast_open", "tfo"); ok {
+		outbound["tcp_fast_open"] = tcpFastOpen
+	}
+	if tcpMultiPath, ok := getBool(proxy, "mptcp", "tcp-multi-path", "tcp_multi_path"); ok {
+		outbound["tcp_multi_path"] = tcpMultiPath
+	}
+	if udpFragment, ok := getBool(proxy, "udp-fragment", "udp_fragment"); ok {
+		outbound["udp_fragment"] = udpFragment
+	}
+	if domainStrategy := mapClashIPVersionToDomainStrategy(getString(proxy, "ip-version", "ip_version")); domainStrategy != "" {
+		outbound["domain_strategy"] = domainStrategy
+	}
+}
+
+func mapClashIPVersionToDomainStrategy(raw string) string {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(raw), "_", "-")) {
+	case "ipv4":
+		return "ipv4_only"
+	case "ipv6":
+		return "ipv6_only"
+	case "prefer-ipv4":
+		return "prefer_ipv4"
+	case "prefer-ipv6":
+		return "prefer_ipv6"
+	default:
+		return ""
+	}
+}
+
+func getDurationString(m map[string]any, defaultUnit string, keys ...string) (string, bool) {
+	for _, key := range keys {
+		v, ok := m[key]
+		if !ok || v == nil {
+			continue
+		}
+		if duration, ok := normalizeDurationValue(v, defaultUnit); ok {
+			return duration, true
+		}
+	}
+	return "", false
+}
+
+func normalizeDurationValue(raw any, defaultUnit string) (string, bool) {
+	value := strings.TrimSpace(fmt.Sprint(raw))
+	if value == "" {
+		return "", false
+	}
+	if hasLetter(value) {
+		return value, true
+	}
+	if _, err := strconv.ParseFloat(value, 64); err == nil {
+		if defaultUnit == "" {
+			return value, true
+		}
+		return value + defaultUnit, true
+	}
+	return "", false
+}
+
+func hasLetter(value string) bool {
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == 'µ' {
+			return true
+		}
+	}
+	return false
 }
 
 func parseURILineSubscription(text string) ([]ParsedNode, bool) {
@@ -1230,6 +1672,146 @@ func getStringSlice(m map[string]any, key string) []string {
 	default:
 		return nil
 	}
+}
+
+func getStringList(m map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		v, ok := m[key]
+		if !ok || v == nil {
+			continue
+		}
+		if values := parseStringListValue(v); len(values) > 0 {
+			return values
+		}
+	}
+	return nil
+}
+
+func parseStringListValue(value any) []string {
+	switch t := value.(type) {
+	case string:
+		return splitCommaList(t)
+	case []string:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			s := strings.TrimSpace(fmt.Sprint(item))
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func getUint8Array(m map[string]any, keys ...string) ([]int, bool) {
+	for _, key := range keys {
+		v, ok := m[key]
+		if !ok || v == nil {
+			continue
+		}
+		switch t := v.(type) {
+		case []any:
+			values := make([]int, 0, len(t))
+			for _, item := range t {
+				uint8Value, ok := parseUint8(item)
+				if !ok {
+					values = nil
+					break
+				}
+				values = append(values, uint8Value)
+			}
+			if len(values) > 0 {
+				return values, true
+			}
+		case []int:
+			values := make([]int, 0, len(t))
+			valid := true
+			for _, item := range t {
+				if item < 0 || item > 255 {
+					valid = false
+					break
+				}
+				values = append(values, item)
+			}
+			if valid && len(values) > 0 {
+				return values, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func parseUint8(raw any) (int, bool) {
+	switch t := raw.(type) {
+	case int:
+		if t >= 0 && t <= 255 {
+			return t, true
+		}
+	case int8:
+		if t >= 0 {
+			return int(t), true
+		}
+	case int16:
+		if t >= 0 && t <= 255 {
+			return int(t), true
+		}
+	case int32:
+		if t >= 0 && t <= 255 {
+			return int(t), true
+		}
+	case int64:
+		if t >= 0 && t <= 255 {
+			return int(t), true
+		}
+	case uint:
+		if t <= 255 {
+			return int(t), true
+		}
+	case uint8:
+		return int(t), true
+	case uint16:
+		if t <= 255 {
+			return int(t), true
+		}
+	case uint32:
+		if t <= 255 {
+			return int(t), true
+		}
+	case uint64:
+		if t <= 255 {
+			return int(t), true
+		}
+	case float32:
+		if t >= 0 && t <= 255 && float32(int(t)) == t {
+			return int(t), true
+		}
+	case float64:
+		if t >= 0 && t <= 255 && float64(int(t)) == t {
+			return int(t), true
+		}
+	case json.Number:
+		value, err := strconv.ParseInt(t.String(), 10, 64)
+		if err == nil && value >= 0 && value <= 255 {
+			return int(value), true
+		}
+	case string:
+		value, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		if err == nil && value >= 0 && value <= 255 {
+			return int(value), true
+		}
+	}
+	return 0, false
 }
 
 func queryBool(values url.Values, keys ...string) bool {

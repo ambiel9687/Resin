@@ -152,7 +152,7 @@ curl http://127.0.0.1:2260/my-token/MyPlatform:/https/api.ipify.org
 ### 支持的出站节点协议类型
 
 - 对于 sing-box JSON/原始 outbounds：`socks`、`http`、`shadowsocks`、`vmess`、`trojan`、`wireguard`、`hysteria`、`vless`、`shadowtls`、`tuic`、`hysteria2`、`anytls`、`ssh`。
-- 对于 Clash 转换：`ss`/`shadowsocks`、`vmess`、`vless`、`trojan`、`hysteria2`/`hy2`。
+- 对于 Clash 转换：`ss`/`shadowsocks`、`socks`/`socks4`/`socks4a`/`socks5`、`http`、`vmess`、`vless`、`trojan`、`wireguard`/`wg`、`hysteria`、`hysteria2`/`hy2`、`tuic`、`anytls`、`ssh`。
 
 ---
 

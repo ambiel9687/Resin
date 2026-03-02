@@ -170,10 +170,12 @@ func TestParseGeneralSubscription_ClashJSON(t *testing.T) {
 				"password": "pass"
 			},
 			{
-				"name": "ignored-http",
+				"name": "http-test",
 				"type": "http",
 				"server": "2.2.2.2",
-				"port": 8080
+				"port": 8080,
+				"username": "user-http",
+				"password": "pass-http"
 			}
 		]
 	}`)
@@ -182,16 +184,23 @@ func TestParseGeneralSubscription_ClashJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(nodes) != 1 {
-		t.Fatalf("expected 1 parsed node, got %d", len(nodes))
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 parsed nodes, got %d", len(nodes))
 	}
 
-	obj := parseNodeRaw(t, nodes[0].RawOptions)
-	if got := obj["type"]; got != "shadowsocks" {
+	first := parseNodeRaw(t, nodes[0].RawOptions)
+	second := parseNodeRaw(t, nodes[1].RawOptions)
+	if got := first["type"]; got != "shadowsocks" {
 		t.Fatalf("expected type shadowsocks, got %v", got)
 	}
-	if got := obj["tag"]; got != "ss-test" {
+	if got := first["tag"]; got != "ss-test" {
 		t.Fatalf("expected tag ss-test, got %v", got)
+	}
+	if got := second["type"]; got != "http" {
+		t.Fatalf("expected type http, got %v", got)
+	}
+	if got := second["tag"]; got != "http-test" {
+		t.Fatalf("expected tag http-test, got %v", got)
 	}
 }
 
@@ -222,6 +231,464 @@ proxies:
 	}
 	if got := obj["tag"]; got != "vmess-yaml" {
 		t.Fatalf("expected tag vmess-yaml, got %v", got)
+	}
+}
+
+func TestParseGeneralSubscription_ClashJSON_NewProtocolsAndDialFields(t *testing.T) {
+	data := []byte(`{
+		"proxies": [
+			{
+				"name": "socks-test",
+				"type": "socks5",
+				"server": "1.1.1.1",
+				"port": 1080,
+				"username": "socks-user",
+				"password": "socks-pass",
+				"udp": false,
+				"dialer-proxy": "detour-a",
+				"bind-interface": "eth0",
+				"routing-mark": "0x20",
+				"fast-open": true,
+				"mptcp": true,
+				"udp-fragment": true,
+				"ip-version": "ipv6"
+			},
+			{
+				"name": "http-test",
+				"type": "http",
+				"server": "2.2.2.2",
+				"port": 443,
+				"username": "http-user",
+				"password": "http-pass",
+				"headers": {"x-token": "abc"},
+				"tls": true,
+				"sni": "custom.com",
+				"skip-cert-verify": true
+			},
+			{
+				"name": "wg-test",
+				"type": "wireguard",
+				"server": "162.159.192.1",
+				"port": 2480,
+				"private-key": "priv-key",
+				"public-key": "pub-key",
+				"pre-shared-key": "psk",
+				"ip": "172.16.0.2",
+				"ipv6": "fd01::1",
+				"allowed-ips": ["0.0.0.0/0", "::/0"],
+				"reserved": [209, 98, 59],
+				"mtu": 1408,
+				"udp": false,
+				"ip-version": "prefer-ipv4"
+			},
+			{
+				"name": "hy-test",
+				"type": "hysteria",
+				"server": "server.com",
+				"port": 443,
+				"auth-str": "yourpassword",
+				"obfs": "obfs-str",
+				"up": "30",
+				"down": "200",
+				"ports": "1000,2000-3000",
+				"protocol": "udp",
+				"recv-window-conn": 12582912,
+				"recv-window": 52428800,
+				"disable_mtu_discovery": true,
+				"sni": "server.com",
+				"skip-cert-verify": true,
+				"alpn": ["h3"]
+			},
+			{
+				"name": "tuic-test",
+				"type": "tuic",
+				"server": "www.example.com",
+				"port": 10443,
+				"uuid": "00000000-0000-0000-0000-000000000001",
+				"password": "PASSWORD_1",
+				"congestion-controller": "bbr",
+				"udp-relay-mode": "native",
+				"reduce-rtt": true,
+				"heartbeat-interval": 10000,
+				"disable-sni": true,
+				"sni": "example.com",
+				"skip-cert-verify": true,
+				"alpn": ["h3"]
+			},
+			{
+				"name": "anytls-test",
+				"type": "anytls",
+				"server": "1.2.3.4",
+				"port": 443,
+				"password": "anytls-pass",
+				"idle-session-check-interval": 30,
+				"idle-session-timeout": 40,
+				"min-idle-session": 2,
+				"sni": "example.com",
+				"skip-cert-verify": true,
+				"alpn": ["h2", "http/1.1"],
+				"client-fingerprint": "chrome"
+			},
+			{
+				"name": "ssh-test",
+				"type": "ssh",
+				"server": "127.0.0.1",
+				"port": 22,
+				"username": "root",
+				"password": "password",
+				"private-key": "key",
+				"private-key-passphrase": "key-password",
+				"host-key": ["ssh-rsa AAAAB3Nza..."],
+				"host-key-algorithms": ["rsa"],
+				"client-version": "SSH-2.0-OpenSSH_7.4p1"
+			}
+		]
+	}`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 7 {
+		t.Fatalf("expected 7 parsed nodes, got %d", len(nodes))
+	}
+
+	byTag := parseNodesByTag(t, nodes)
+
+	socks := byTag["socks-test"]
+	if got := socks["type"]; got != "socks" {
+		t.Fatalf("socks type: got %v", got)
+	}
+	if got := socks["version"]; got != "5" {
+		t.Fatalf("socks version: got %v", got)
+	}
+	if got := socks["network"]; got != "tcp" {
+		t.Fatalf("socks network: got %v", got)
+	}
+	if got := socks["detour"]; got != "detour-a" {
+		t.Fatalf("socks detour: got %v", got)
+	}
+	if got := socks["bind_interface"]; got != "eth0" {
+		t.Fatalf("socks bind_interface: got %v", got)
+	}
+	if got := socks["routing_mark"]; got != "0x20" {
+		t.Fatalf("socks routing_mark: got %v", got)
+	}
+	if got := socks["tcp_fast_open"]; got != true {
+		t.Fatalf("socks tcp_fast_open: got %v", got)
+	}
+	if got := socks["tcp_multi_path"]; got != true {
+		t.Fatalf("socks tcp_multi_path: got %v", got)
+	}
+	if got := socks["udp_fragment"]; got != true {
+		t.Fatalf("socks udp_fragment: got %v", got)
+	}
+	if got := socks["domain_strategy"]; got != "ipv6_only" {
+		t.Fatalf("socks domain_strategy: got %v", got)
+	}
+
+	httpNode := byTag["http-test"]
+	if got := httpNode["type"]; got != "http" {
+		t.Fatalf("http type: got %v", got)
+	}
+	httpTLS := mustMapField(t, httpNode, "tls")
+	if got := httpTLS["enabled"]; got != true {
+		t.Fatalf("http tls.enabled: got %v", got)
+	}
+	if got := httpTLS["server_name"]; got != "custom.com" {
+		t.Fatalf("http tls.server_name: got %v", got)
+	}
+	if got := httpTLS["insecure"]; got != true {
+		t.Fatalf("http tls.insecure: got %v", got)
+	}
+
+	wireGuard := byTag["wg-test"]
+	if got := wireGuard["type"]; got != "wireguard" {
+		t.Fatalf("wireguard type: got %v", got)
+	}
+	if got := wireGuard["private_key"]; got != "priv-key" {
+		t.Fatalf("wireguard private_key: got %v", got)
+	}
+	if got := wireGuard["peer_public_key"]; got != "pub-key" {
+		t.Fatalf("wireguard peer_public_key: got %v", got)
+	}
+	if got := wireGuard["pre_shared_key"]; got != "psk" {
+		t.Fatalf("wireguard pre_shared_key: got %v", got)
+	}
+	if got := wireGuard["network"]; got != "tcp" {
+		t.Fatalf("wireguard network: got %v", got)
+	}
+	if got := wireGuard["domain_strategy"]; got != "prefer_ipv4" {
+		t.Fatalf("wireguard domain_strategy: got %v", got)
+	}
+	localAddress := mustSliceField(t, wireGuard, "local_address")
+	if !containsAnyString(localAddress, "172.16.0.2/32") {
+		t.Fatalf("wireguard local_address missing ipv4 entry: %v", localAddress)
+	}
+	if !containsAnyString(localAddress, "fd01::1/128") {
+		t.Fatalf("wireguard local_address missing ipv6 entry: %v", localAddress)
+	}
+	topReserved := mustSliceField(t, wireGuard, "reserved")
+	if len(topReserved) != 3 {
+		t.Fatalf("wireguard reserved length: got %d", len(topReserved))
+	}
+
+	hysteria := byTag["hy-test"]
+	if got := hysteria["type"]; got != "hysteria" {
+		t.Fatalf("hysteria type: got %v", got)
+	}
+	if got := hysteria["up"]; got != "30 Mbps" {
+		t.Fatalf("hysteria up: got %v", got)
+	}
+	if got := hysteria["down"]; got != "200 Mbps" {
+		t.Fatalf("hysteria down: got %v", got)
+	}
+	if got := hysteria["network"]; got != "udp" {
+		t.Fatalf("hysteria network: got %v", got)
+	}
+	serverPorts := mustSliceField(t, hysteria, "server_ports")
+	if !containsAnyString(serverPorts, "1000") || !containsAnyString(serverPorts, "2000-3000") {
+		t.Fatalf("hysteria server_ports mismatch: %v", serverPorts)
+	}
+
+	tuic := byTag["tuic-test"]
+	if got := tuic["type"]; got != "tuic" {
+		t.Fatalf("tuic type: got %v", got)
+	}
+	if got := tuic["congestion_control"]; got != "bbr" {
+		t.Fatalf("tuic congestion_control: got %v", got)
+	}
+	if got := tuic["udp_relay_mode"]; got != "native" {
+		t.Fatalf("tuic udp_relay_mode: got %v", got)
+	}
+	if got := tuic["zero_rtt_handshake"]; got != true {
+		t.Fatalf("tuic zero_rtt_handshake: got %v", got)
+	}
+	if got := tuic["heartbeat"]; got != "10000ms" {
+		t.Fatalf("tuic heartbeat: got %v", got)
+	}
+	tuicTLS := mustMapField(t, tuic, "tls")
+	if got := tuicTLS["disable_sni"]; got != true {
+		t.Fatalf("tuic tls.disable_sni: got %v", got)
+	}
+	if got := tuicTLS["server_name"]; got != "example.com" {
+		t.Fatalf("tuic tls.server_name: got %v", got)
+	}
+
+	anytls := byTag["anytls-test"]
+	if got := anytls["type"]; got != "anytls" {
+		t.Fatalf("anytls type: got %v", got)
+	}
+	if got := anytls["idle_session_check_interval"]; got != "30s" {
+		t.Fatalf("anytls idle_session_check_interval: got %v", got)
+	}
+	if got := anytls["idle_session_timeout"]; got != "40s" {
+		t.Fatalf("anytls idle_session_timeout: got %v", got)
+	}
+	if got := anytls["min_idle_session"]; got != float64(2) {
+		t.Fatalf("anytls min_idle_session: got %v", got)
+	}
+	anyTLSTLS := mustMapField(t, anytls, "tls")
+	utls := mustMapField(t, anyTLSTLS, "utls")
+	if got := utls["enabled"]; got != true {
+		t.Fatalf("anytls tls.utls.enabled: got %v", got)
+	}
+	if got := utls["fingerprint"]; got != "chrome" {
+		t.Fatalf("anytls tls.utls.fingerprint: got %v", got)
+	}
+
+	ssh := byTag["ssh-test"]
+	if got := ssh["type"]; got != "ssh" {
+		t.Fatalf("ssh type: got %v", got)
+	}
+	if got := ssh["user"]; got != "root" {
+		t.Fatalf("ssh user: got %v", got)
+	}
+	if got := ssh["private_key"]; got != "key" {
+		t.Fatalf("ssh private_key: got %v", got)
+	}
+	if got := ssh["private_key_passphrase"]; got != "key-password" {
+		t.Fatalf("ssh private_key_passphrase: got %v", got)
+	}
+	hostKeyAlgorithms := mustSliceField(t, ssh, "host_key_algorithms")
+	if !containsAnyString(hostKeyAlgorithms, "rsa") {
+		t.Fatalf("ssh host_key_algorithms: got %v", hostKeyAlgorithms)
+	}
+}
+
+func TestParseGeneralSubscription_ClashJSON_TUICWithoutUUIDIsSkipped(t *testing.T) {
+	data := []byte(`{
+		"proxies": [
+			{
+				"name": "tuic-token-only",
+				"type": "tuic",
+				"server": "www.example.com",
+				"port": 10443,
+				"token": "TOKEN"
+			},
+			{
+				"name": "ss-test",
+				"type": "ss",
+				"server": "1.1.1.1",
+				"port": 8388,
+				"cipher": "aes-128-gcm",
+				"password": "pass"
+			}
+		]
+	}`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 parsed node, got %d", len(nodes))
+	}
+	obj := parseNodeRaw(t, nodes[0].RawOptions)
+	if got := obj["tag"]; got != "ss-test" {
+		t.Fatalf("expected ss-test to remain, got %v", got)
+	}
+}
+
+func TestParseGeneralSubscription_ClashJSON_WireGuardMissingAddressIsSkipped(t *testing.T) {
+	data := []byte(`{
+		"proxies": [
+			{
+				"name": "wg-missing-address",
+				"type": "wireguard",
+				"server": "162.159.192.1",
+				"port": 2480,
+				"private-key": "priv-key",
+				"public-key": "pub-key"
+			},
+			{
+				"name": "http-ok",
+				"type": "http",
+				"server": "2.2.2.2",
+				"port": 8080
+			}
+		]
+	}`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 parsed node, got %d", len(nodes))
+	}
+	obj := parseNodeRaw(t, nodes[0].RawOptions)
+	if got := obj["type"]; got != "http" {
+		t.Fatalf("expected remaining node type http, got %v", got)
+	}
+}
+
+func TestParseGeneralSubscription_ClashJSON_WireGuardMissingAllowedIPsIsSkipped(t *testing.T) {
+	data := []byte(`{
+		"proxies": [
+			{
+				"name": "wg-missing-allowed-ips",
+				"type": "wireguard",
+				"server": "162.159.192.1",
+				"port": 2480,
+				"private-key": "priv-key",
+				"public-key": "pub-key",
+				"ip": "172.16.0.2"
+			},
+			{
+				"name": "socks-ok",
+				"type": "socks5",
+				"server": "1.1.1.1",
+				"port": 1080
+			}
+		]
+	}`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 parsed node, got %d", len(nodes))
+	}
+	obj := parseNodeRaw(t, nodes[0].RawOptions)
+	if got := obj["type"]; got != "socks" {
+		t.Fatalf("expected remaining node type socks, got %v", got)
+	}
+}
+
+func TestParseGeneralSubscription_ClashJSON_HysteriaNonUDPProtocolIgnored(t *testing.T) {
+	data := []byte(`{
+		"proxies": [
+			{
+				"name": "hy-faketcp",
+				"type": "hysteria",
+				"server": "server.com",
+				"port": 443,
+				"auth-str": "yourpassword",
+				"up": "30 Mbps",
+				"down": "200 Mbps",
+				"protocol": "faketcp"
+			}
+		]
+	}`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 parsed node, got %d", len(nodes))
+	}
+	obj := parseNodeRaw(t, nodes[0].RawOptions)
+	if got := obj["type"]; got != "hysteria" {
+		t.Fatalf("expected hysteria node, got %v", got)
+	}
+	if _, exists := obj["network"]; exists {
+		t.Fatalf("expected protocol=faketcp to be ignored, got network=%v", obj["network"])
+	}
+}
+
+func TestParseGeneralSubscription_ClashJSON_HTTPAndSOCKSUnsupportedFieldsIgnored(t *testing.T) {
+	data := []byte(`{
+		"proxies": [
+			{
+				"name": "socks-extra",
+				"type": "socks",
+				"server": "1.1.1.1",
+				"port": 1080,
+				"tls": true,
+				"fingerprint": "xxxx",
+				"skip-cert-verify": true
+			},
+			{
+				"name": "http-extra",
+				"type": "http",
+				"server": "2.2.2.2",
+				"port": 443,
+				"tls": true,
+				"sni": "custom.com",
+				"fingerprint": "xxxx"
+			}
+		]
+	}`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 parsed nodes, got %d", len(nodes))
+	}
+
+	byTag := parseNodesByTag(t, nodes)
+	socks := byTag["socks-extra"]
+	if _, exists := socks["tls"]; exists {
+		t.Fatalf("expected socks tls to be ignored, got %v", socks["tls"])
+	}
+	httpNode := byTag["http-extra"]
+	if _, exists := httpNode["fingerprint"]; exists {
+		t.Fatalf("expected http fingerprint to be ignored, got %v", httpNode["fingerprint"])
 	}
 }
 
@@ -462,4 +929,50 @@ func parseNodeRaw(t *testing.T, raw json.RawMessage) map[string]any {
 		t.Fatalf("unmarshal node raw failed: %v", err)
 	}
 	return obj
+}
+
+func parseNodesByTag(t *testing.T, nodes []ParsedNode) map[string]map[string]any {
+	t.Helper()
+	byTag := make(map[string]map[string]any, len(nodes))
+	for _, node := range nodes {
+		obj := parseNodeRaw(t, node.RawOptions)
+		tag, _ := obj["tag"].(string)
+		byTag[tag] = obj
+	}
+	return byTag
+}
+
+func mustMapField(t *testing.T, obj map[string]any, key string) map[string]any {
+	t.Helper()
+	value, ok := obj[key]
+	if !ok {
+		t.Fatalf("missing map field %q", key)
+	}
+	out, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("field %q expected map[string]any, got %T", key, value)
+	}
+	return out
+}
+
+func mustSliceField(t *testing.T, obj map[string]any, key string) []any {
+	t.Helper()
+	value, ok := obj[key]
+	if !ok {
+		t.Fatalf("missing slice field %q", key)
+	}
+	out, ok := value.([]any)
+	if !ok {
+		t.Fatalf("field %q expected []any, got %T", key, value)
+	}
+	return out
+}
+
+func containsAnyString(values []any, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }

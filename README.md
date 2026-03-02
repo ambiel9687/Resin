@@ -163,7 +163,7 @@ curl http://127.0.0.1:2260/my-token/MyPlatform:/https/api.ipify.org
 ### Supported outbound node types
 
 - For sing-box JSON/raw outbounds: `socks`, `http`, `shadowsocks`, `vmess`, `trojan`, `wireguard`, `hysteria`, `vless`, `shadowtls`, `tuic`, `hysteria2`, `anytls`, `ssh`.
-- For Clash conversion: `ss`/`shadowsocks`, `vmess`, `vless`, `trojan`, `hysteria2`/`hy2`.
+- For Clash conversion: `ss`/`shadowsocks`, `socks`/`socks4`/`socks4a`/`socks5`, `http`, `vmess`, `vless`, `trojan`, `wireguard`/`wg`, `hysteria`, `hysteria2`/`hy2`, `tuic`, `anytls`, `ssh`.
 
 ---
 
