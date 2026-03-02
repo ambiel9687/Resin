@@ -255,7 +255,8 @@ Resin 从订阅中获取节点配置。
 订阅解析器的职责是从订阅内容中提取节点信息。实现通用解析器 `GeneralSubscriptionParser`，支持以下输入格式：
 * sing-box JSON（`outbounds` 结构）。
 * Clash JSON / YAML（`proxies` 结构）。
-* URI 行列表（`vmess://`、`vless://`、`trojan://`、`ss://`、`hysteria2://`）。
+* URI 行列表（`vmess://`、`vless://`、`trojan://`、`ss://`、`hysteria2://`、`http://`、`https://`、`socks5://`、`socks5h://`）。
+  * 对于 `http://`、`https://`、`socks5://`、`socks5h://`，格式限定为 `scheme://[user:pass@]host:port`（可选 `#tag`；`https` 允许 `sni`/`servername`/`peer` 与 `allowInsecure`/`insecure` 查询参数）。
 * 纯文本 HTTP 代理行列表（`IP:PORT` 或 `IP:PORT:USER:PASS`，支持 IPv4/IPv6）。
 * 对上述文本内容的 base64 包裹形式（先解码再解析）。
 

@@ -65,8 +65,9 @@ func NewGeneralSubscriptionParser() *GeneralSubscriptionParser {
 }
 
 // ParseGeneralSubscription parses sing-box JSON / Clash JSON|YAML / URI-line
-// subscriptions, plus plain HTTP proxy lines (IP:PORT or IP:PORT:USER:PASS),
-// with optional base64-wrapped content support.
+// subscriptions (vmess/vless/trojan/ss/hysteria2/http/https/socks5/socks5h),
+// plus plain HTTP proxy lines (IP:PORT or IP:PORT:USER:PASS), with optional
+// base64-wrapped content support.
 func ParseGeneralSubscription(data []byte) ([]ParsedNode, error) {
 	return NewGeneralSubscriptionParser().Parse(data)
 }
@@ -378,6 +379,12 @@ func parseURILineSubscription(text string) ([]ParsedNode, bool) {
 		case strings.HasPrefix(lower, "hysteria2://"):
 			recognized = true
 			node, ok = parseHysteria2URI(line)
+		case strings.HasPrefix(lower, "http://"),
+			strings.HasPrefix(lower, "https://"),
+			strings.HasPrefix(lower, "socks5://"),
+			strings.HasPrefix(lower, "socks5h://"):
+			recognized = true
+			node, ok = parseProxyURI(line)
 		default:
 			node, ok = parsePlainHTTPProxyLine(line)
 			if ok {
@@ -400,6 +407,113 @@ func parsePlainHTTPProxyLine(line string) (ParsedNode, bool) {
 		return node, true
 	}
 	return parseHTTPProxyIPPort(line)
+}
+
+func parseProxyURI(uri string) (ParsedNode, bool) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return ParsedNode{}, false
+	}
+
+	scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
+	server := strings.TrimSpace(u.Hostname())
+	if server == "" {
+		return ParsedNode{}, false
+	}
+	if !isProxyURIPathAllowed(u.Path) {
+		return ParsedNode{}, false
+	}
+	port, ok := parseRequiredURIPort(u)
+	if !ok {
+		return ParsedNode{}, false
+	}
+
+	nodeType := ""
+	switch scheme {
+	case "http":
+		nodeType = "http"
+	case "https":
+		nodeType = "http"
+	case "socks5", "socks5h":
+		nodeType = "socks"
+	default:
+		return ParsedNode{}, false
+	}
+	if scheme != "https" && strings.TrimSpace(u.RawQuery) != "" {
+		return ParsedNode{}, false
+	}
+
+	tag := decodeTag(u.Fragment)
+	outbound := map[string]any{
+		"type":        nodeType,
+		"tag":         defaultTag(tag, nodeType, server, port),
+		"server":      server,
+		"server_port": port,
+	}
+
+	if u.User != nil {
+		if username := strings.TrimSpace(u.User.Username()); username != "" {
+			outbound["username"] = username
+		}
+		if password, ok := u.User.Password(); ok {
+			outbound["password"] = password
+		}
+	}
+
+	if scheme == "https" {
+		query := u.Query()
+		if !hasOnlyAllowedQueryKeys(query, "sni", "servername", "peer", "allowInsecure", "insecure") {
+			return ParsedNode{}, false
+		}
+		tls := map[string]any{
+			"enabled": true,
+		}
+		serverName := strings.TrimSpace(firstNonEmpty(
+			query.Get("sni"),
+			query.Get("servername"),
+			query.Get("peer"),
+			server,
+		))
+		if serverName != "" {
+			tls["server_name"] = serverName
+		}
+		if queryBool(query, "allowInsecure", "insecure") {
+			tls["insecure"] = true
+		}
+		outbound["tls"] = tls
+	}
+
+	return buildParsedNode(outbound)
+}
+
+func parseRequiredURIPort(u *url.URL) (uint64, bool) {
+	port := strings.TrimSpace(u.Port())
+	if port == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func isProxyURIPathAllowed(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	return trimmed == "" || trimmed == "/"
+}
+
+func hasOnlyAllowedQueryKeys(values url.Values, allowedKeys ...string) bool {
+	allowed := make(map[string]struct{}, len(allowedKeys))
+	for _, key := range allowedKeys {
+		allowed[strings.ToLower(strings.TrimSpace(key))] = struct{}{}
+	}
+	for key := range values {
+		if _, ok := allowed[strings.ToLower(strings.TrimSpace(key))]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func parseHTTPProxyIPPort(line string) (ParsedNode, bool) {

@@ -156,7 +156,8 @@ curl http://127.0.0.1:2260/my-token/MyPlatform:/https/api.ipify.org
 
 - sing-box JSON: `{"outbounds":[...]}` or raw outbound array `[...]`.
 - Clash JSON/YAML: `{"proxies":[...]}` or YAML `proxies:`.
-- URI line format (one node per line): `vmess://`, `vless://`, `trojan://`, `ss://`, `hysteria2://`.
+- URI line format (one node per line): `vmess://`, `vless://`, `trojan://`, `ss://`, `hysteria2://`, `http://`, `https://`, `socks5://`, `socks5h://`.
+  For `http://`, `https://`, `socks5://`, `socks5h://`, use `scheme://[user:pass@]host:port` (optional `#tag`; `https` also supports `sni`/`servername`/`peer` and `allowInsecure`/`insecure` query parameters).
 - Plain HTTP proxy lines: `IP:PORT` or `IP:PORT:USER:PASS` (IPv4 and IPv6).
 - Base64-wrapped text subscriptions (for URI lines/plain-text node lists).
 

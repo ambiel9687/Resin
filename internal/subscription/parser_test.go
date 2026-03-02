@@ -246,6 +246,114 @@ vless://26a1d547-b031-4139-9fc5-6671e1d0408a@example.com:443?type=tcp&security=t
 	}
 }
 
+func TestParseGeneralSubscription_ProxyURILines(t *testing.T) {
+	data := []byte(`
+http://user-http:pass-http@1.2.3.4:8080#HTTP%20Node
+https://user-https:pass-https@example.com:8443?sni=tls.example.com&allowInsecure=1#HTTPS%20Node
+socks5://user-s5:pass-s5@5.6.7.8:1081#SOCKS5%20Node
+socks5h://user-s5h:pass-s5h@proxy.example.net:1082#SOCKS5H%20Node
+`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 4 {
+		t.Fatalf("expected 4 parsed nodes, got %d", len(nodes))
+	}
+
+	first := parseNodeRaw(t, nodes[0].RawOptions)
+	second := parseNodeRaw(t, nodes[1].RawOptions)
+	third := parseNodeRaw(t, nodes[2].RawOptions)
+	fourth := parseNodeRaw(t, nodes[3].RawOptions)
+
+	if got := first["type"]; got != "http" {
+		t.Fatalf("expected first type http, got %v", got)
+	}
+	if got := first["username"]; got != "user-http" {
+		t.Fatalf("expected first username user-http, got %v", got)
+	}
+	if got := first["password"]; got != "pass-http" {
+		t.Fatalf("expected first password pass-http, got %v", got)
+	}
+	if got := first["tag"]; got != "HTTP Node" {
+		t.Fatalf("expected first tag HTTP Node, got %v", got)
+	}
+
+	if got := second["type"]; got != "http" {
+		t.Fatalf("expected second type http, got %v", got)
+	}
+	tls, ok := second["tls"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected second tls object, got %T", second["tls"])
+	}
+	if got := tls["enabled"]; got != true {
+		t.Fatalf("expected second tls.enabled true, got %v", got)
+	}
+	if got := tls["server_name"]; got != "tls.example.com" {
+		t.Fatalf("expected second tls.server_name tls.example.com, got %v", got)
+	}
+	if got := tls["insecure"]; got != true {
+		t.Fatalf("expected second tls.insecure true, got %v", got)
+	}
+	if got := second["tag"]; got != "HTTPS Node" {
+		t.Fatalf("expected second tag HTTPS Node, got %v", got)
+	}
+
+	if got := third["type"]; got != "socks" {
+		t.Fatalf("expected third type socks, got %v", got)
+	}
+	if got := third["server"]; got != "5.6.7.8" {
+		t.Fatalf("expected third server 5.6.7.8, got %v", got)
+	}
+	if got := third["server_port"]; got != float64(1081) {
+		t.Fatalf("expected third server_port 1081, got %v", got)
+	}
+	if got := third["username"]; got != "user-s5" {
+		t.Fatalf("expected third username user-s5, got %v", got)
+	}
+	if got := third["password"]; got != "pass-s5" {
+		t.Fatalf("expected third password pass-s5, got %v", got)
+	}
+
+	if got := fourth["type"]; got != "socks" {
+		t.Fatalf("expected fourth type socks, got %v", got)
+	}
+	if got := fourth["server"]; got != "proxy.example.net" {
+		t.Fatalf("expected fourth server proxy.example.net, got %v", got)
+	}
+	if got := fourth["server_port"]; got != float64(1082) {
+		t.Fatalf("expected fourth server_port 1082, got %v", got)
+	}
+	if got := fourth["username"]; got != "user-s5h" {
+		t.Fatalf("expected fourth username user-s5h, got %v", got)
+	}
+	if got := fourth["password"]; got != "pass-s5h" {
+		t.Fatalf("expected fourth password pass-s5h, got %v", got)
+	}
+}
+
+func TestParseGeneralSubscription_ProxyURILinesRejectNonProxyURLs(t *testing.T) {
+	tests := []string{
+		"https://api.example.com",
+		"https://api.example.com/subscription/token",
+		"http://api.example.com:8080/path/to/resource",
+		"socks5://proxy.example.com:1080/path",
+		"socks5://proxy.example.com:1080?token=abc",
+		"https://proxy.example.com:8443?token=abc",
+	}
+
+	for _, input := range tests {
+		nodes, err := ParseGeneralSubscription([]byte(input))
+		if err != nil {
+			t.Fatalf("input %q should not return error, got %v", input, err)
+		}
+		if len(nodes) != 0 {
+			t.Fatalf("input %q should not be parsed as proxy node, got %d", input, len(nodes))
+		}
+	}
+}
+
 func TestParseGeneralSubscription_PlainHTTPProxyLines(t *testing.T) {
 	data := []byte(`
 1.2.3.4:8080

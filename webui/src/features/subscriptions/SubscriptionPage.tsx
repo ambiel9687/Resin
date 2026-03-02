@@ -130,6 +130,21 @@ export function SubscriptionPage() {
 
   const queryClient = useQueryClient();
   const enabledValue = parseEnabledFilter(enabledFilter);
+  const subscriptionContentPlaceholder = [
+    `{"outbounds":[{"type":"shadowsocks","server":"1.2.3.4","server_port":443,"method":"aes-256-gcm","password":"pass"}]}`,
+    `{"proxies":[{"name":"node-1","type":"vmess","server":"1.2.3.4","port":443,"uuid":"26a1d547-b031-4139-9fc5-6671e1d0408a"}]}`,
+    "vmess://...",
+    "vless://...",
+    "trojan://...",
+    "ss://...",
+    "hysteria2://...",
+    "http://user:pass@1.2.3.4:8080",
+    "https://user:pass@example.com:8443?sni=example.com",
+    "socks5://user:pass@1.2.3.4:1080",
+    "socks5h://user:pass@example.com:1080",
+    "1.2.3.4:8080",
+    "1.2.3.4:8080:user:pass",
+  ].join("\n");
 
   const subscriptionsQuery = useQuery({
     queryKey: ["subscriptions", enabledFilter, page, pageSize, search],
@@ -718,7 +733,7 @@ export function SubscriptionPage() {
                       <Textarea
                         id="edit-sub-content"
                         rows={8}
-                        placeholder={t("支持 sing-box JSON / Clash YAML / URI / IP:PORT 或 IP:PORT:USER:PASS 列表")}
+                        placeholder={subscriptionContentPlaceholder}
                         invalid={Boolean(editForm.formState.errors.content)}
                         {...editForm.register("content")}
                       />
@@ -929,7 +944,7 @@ export function SubscriptionPage() {
                   <Textarea
                     id="create-sub-content"
                     rows={8}
-                    placeholder={t("支持 sing-box JSON / Clash YAML / URI / IP:PORT 或 IP:PORT:USER:PASS 列表")}
+                    placeholder={subscriptionContentPlaceholder}
                     invalid={Boolean(createForm.formState.errors.content)}
                     {...createForm.register("content")}
                   />
