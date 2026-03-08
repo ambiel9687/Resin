@@ -69,37 +69,29 @@ export function formatGoDuration(input: string, emptyLabel = "-"): string {
   const minutes = Math.floor((wholeSeconds % 3_600) / 60);
   const seconds = wholeSeconds % 60;
 
-  const parts: string[] = [];
   if (english) {
     if (days > 0) {
-      parts.push(`${days}d`);
+      return `${days}d ${hours}h`;
     }
     if (hours > 0) {
-      parts.push(`${hours}h`);
+      return `${hours}h ${minutes}m`;
     }
-    if (days === 0 && minutes > 0) {
-      parts.push(`${minutes}m`);
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
     }
-    if (days === 0 && hours === 0 && seconds > 0) {
-      parts.push(`${seconds}s`);
-    }
-    return parts.slice(0, 2).join(" ");
+    return `${seconds}s`;
   }
 
   if (days > 0) {
-    parts.push(`${days} 天`);
+    return `${days} 天 ${hours} 小时`;
   }
   if (hours > 0) {
-    parts.push(`${hours} 小时`);
+    return `${hours} 小时 ${minutes} 分钟`;
   }
-  if (days === 0 && minutes > 0) {
-    parts.push(`${minutes} 分钟`);
+  if (minutes > 0) {
+    return `${minutes} 分钟 ${seconds} 秒`;
   }
-  if (days === 0 && hours === 0 && seconds > 0) {
-    parts.push(`${seconds} 秒`);
-  }
-
-  return parts.slice(0, 2).join(" ");
+  return `${seconds} 秒`;
 }
 
 export function formatRelativeTime(input: string | null | undefined, emptyLabel = "-"): string {
