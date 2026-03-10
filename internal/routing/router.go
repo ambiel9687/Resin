@@ -261,6 +261,16 @@ func (r *Router) tryLeaseHit(
 
 	newLease := current
 	newLease.LastAccessedNs = nowNs
+
+	// Auto-renew: extend lease when within 1 minute of expiry.
+	if newLease.ExpiryNs-nowNs < int64(time.Minute) {
+		ttl := plat.StickyTTLNs
+		if ttl <= 0 {
+			ttl = int64(24 * time.Hour)
+		}
+		newLease.ExpiryNs = nowNs + ttl
+	}
+
 	r.emitLeaseEvent(LeaseEvent{
 		Type:       LeaseTouch,
 		PlatformID: plat.ID,
@@ -297,6 +307,16 @@ func (r *Router) tryLeaseSameIPRotation(
 	newLease := current
 	newLease.NodeHash = bestHash
 	newLease.LastAccessedNs = nowNs
+
+	// Auto-renew: extend lease when within 1 minute of expiry.
+	if newLease.ExpiryNs-nowNs < int64(time.Minute) {
+		ttl := plat.StickyTTLNs
+		if ttl <= 0 {
+			ttl = int64(24 * time.Hour)
+		}
+		newLease.ExpiryNs = nowNs + ttl
+	}
+
 	r.emitLeaseEvent(LeaseEvent{
 		Type:       LeaseReplace,
 		PlatformID: plat.ID,
