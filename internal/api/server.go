@@ -120,6 +120,10 @@ func NewServerWithAddress(
 		authed.Handle("GET /api/v1/geoip/lookup", HandleGeoIPLookup(cp))
 		authed.Handle("POST /api/v1/geoip/lookup", HandleGeoIPLookupPost(cp))
 		authed.Handle("POST /api/v1/geoip/actions/update-now", HandleGeoIPUpdate(cp))
+
+		// Data export / import.
+		authed.Handle("GET /api/v1/data/export", HandleExportData(cp))
+		authed.Handle("POST /api/v1/data/import", HandleImportData(cp))
 	}
 
 	// Request log endpoints (always registered if repo is available).

@@ -625,6 +625,23 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "总请求": "Total requests",
   "最近错误：{{message}}": "Recent error: {{message}}",
   "配置已更新（{{count}} 项变更）": "Config updated ({{count}} changes)",
+  "数据管理": "Data Management",
+  "导出平台与订阅配置为 JSON 文件，用于备份或迁移。": "Export platform and subscription configs as JSON for backup or migration.",
+  "导出 JSON": "Export JSON",
+  "导出中...": "Exporting...",
+  "导出成功": "Export successful",
+  "导入 JSON 文件以恢复平台与订阅配置。": "Import a JSON file to restore platform and subscription configs.",
+  "选择 JSON 文件": "Select JSON file",
+  "冲突策略": "Conflict strategy",
+  "跳过已存在": "Skip existing",
+  "覆盖已存在": "Overwrite existing",
+  "导入": "Import",
+  "导入中...": "Importing...",
+  "请先选择 JSON 文件": "Please select a JSON file first",
+  "JSON 文件解析失败": "Failed to parse JSON file",
+  "创建 {{count}} 项": "{{count}} created",
+  "跳过 {{count}} 项": "{{count}} skipped",
+  "覆盖 {{count}} 项": "{{count}} overwritten",
 };
 
 export function translateDocumentTitle(locale: AppLocale): string {
