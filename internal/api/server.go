@@ -89,6 +89,7 @@ func NewServerWithAddress(
 		authed.Handle("GET /api/v1/platforms/{id}/leases", HandleListLeases(cp))
 		authed.Handle("DELETE /api/v1/platforms/{id}/leases", HandleDeleteAllLeases(cp))
 		authed.Handle("GET /api/v1/platforms/{id}/leases/{account}", HandleGetLease(cp))
+		authed.Handle("PUT /api/v1/platforms/{id}/leases/{account}", HandleBindLease(cp))
 		authed.Handle("DELETE /api/v1/platforms/{id}/leases/{account}", HandleDeleteLease(cp))
 		authed.Handle("GET /api/v1/platforms/{id}/ip-load", HandleIPLoad(cp))
 

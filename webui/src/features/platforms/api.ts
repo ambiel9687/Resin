@@ -1,5 +1,5 @@
 import { apiRequest } from "../../lib/api-client";
-import type { PageResponse, Platform, PlatformCreateInput, PlatformUpdateInput } from "./types";
+import type { LeaseResponse, PageResponse, Platform, PlatformCreateInput, PlatformUpdateInput } from "./types";
 
 const basePath = "/api/v1/platforms";
 
@@ -110,4 +110,49 @@ export async function clearAllPlatformLeases(id: string): Promise<void> {
   await apiRequest<void>(`${basePath}/${id}/leases`, {
     method: "DELETE",
   });
+}
+
+export type ListLeasesInput = {
+  limit?: number;
+  offset?: number;
+  account?: string;
+  fuzzy?: boolean;
+  sort_by?: string;
+  sort_order?: string;
+};
+
+export async function listPlatformLeases(
+  platformId: string,
+  input: ListLeasesInput = {},
+): Promise<PageResponse<LeaseResponse>> {
+  const query = new URLSearchParams({
+    limit: String(input.limit ?? 50),
+    offset: String(input.offset ?? 0),
+  });
+  if (input.account?.trim()) {
+    query.set("account", input.account.trim());
+    if (input.fuzzy !== false) {
+      query.set("fuzzy", "true");
+    }
+  }
+  if (input.sort_by) query.set("sort_by", input.sort_by);
+  if (input.sort_order) query.set("sort_order", input.sort_order);
+  return apiRequest<PageResponse<LeaseResponse>>(`${basePath}/${platformId}/leases?${query.toString()}`);
+}
+
+export async function deletePlatformLease(platformId: string, account: string): Promise<void> {
+  await apiRequest<void>(`${basePath}/${platformId}/leases/${encodeURIComponent(account)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function bindPlatformLease(
+  platformId: string,
+  account: string,
+  nodeHash: string,
+): Promise<LeaseResponse> {
+  return apiRequest<LeaseResponse>(
+    `${basePath}/${platformId}/leases/${encodeURIComponent(account)}`,
+    { method: "PUT", body: { node_hash: nodeHash } },
+  );
 }

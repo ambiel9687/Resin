@@ -33,12 +33,14 @@ import {
   type PlatformFormValues,
 } from "./formModel";
 import { PlatformMonitorPanel } from "./PlatformMonitorPanel";
+import { PlatformLeasesPanel } from "./PlatformLeasesPanel";
 
-type PlatformDetailTab = "monitor" | "config" | "ops";
+type PlatformDetailTab = "monitor" | "leases" | "config" | "ops";
 
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 const DETAIL_TABS: Array<{ key: PlatformDetailTab; label: string; hint: string }> = [
   { key: "monitor", label: "监控", hint: "平台运行态趋势和快照" },
+  { key: "leases", label: "租约", hint: "查看和管理当前平台的租约绑定" },
   { key: "config", label: "配置", hint: "过滤规则与分配策略" },
   { key: "ops", label: "运维", hint: "重置、清租约、删除操作" },
 ];
@@ -312,6 +314,17 @@ export function PlatformDetailPage() {
                 className="platform-detail-panel"
               >
                 <PlatformMonitorPanel platform={platform} />
+              </div>
+            ) : null}
+
+            {activeTab === "leases" ? (
+              <div
+                id="platform-tabpanel-leases"
+                role="tabpanel"
+                aria-labelledby="platform-tab-leases"
+                className="platform-detail-panel"
+              >
+                <PlatformLeasesPanel platform={platform} showToast={showToast} />
               </div>
             ) : null}
 

@@ -20,6 +20,7 @@ type LeaseResponse struct {
 	NodeHash     string `json:"node_hash"`
 	NodeTag      string `json:"node_tag"`
 	EgressIP     string `json:"egress_ip"`
+	CreatedAt    string `json:"created_at"`
 	Expiry       string `json:"expiry"`
 	LastAccessed string `json:"last_accessed"`
 }
@@ -31,6 +32,7 @@ func leaseToResponse(lease model.Lease, nodeTag string) LeaseResponse {
 		NodeHash:     lease.NodeHash,
 		NodeTag:      nodeTag,
 		EgressIP:     lease.EgressIP,
+		CreatedAt:    time.Unix(0, lease.CreatedAtNs).UTC().Format(time.RFC3339Nano),
 		Expiry:       time.Unix(0, lease.ExpiryNs).UTC().Format(time.RFC3339Nano),
 		LastAccessed: time.Unix(0, lease.LastAccessedNs).UTC().Format(time.RFC3339Nano),
 	}
@@ -63,6 +65,7 @@ func (s *ControlPlaneService) ListLeases(platformID string) ([]LeaseResponse, er
 			Account:        account,
 			NodeHash:       lease.NodeHash.Hex(),
 			EgressIP:       lease.EgressIP.String(),
+			CreatedAtNs:    lease.CreatedAtNs,
 			ExpiryNs:       lease.ExpiryNs,
 			LastAccessedNs: lease.LastAccessedNs,
 		}, s.resolveLeaseNodeTag(lease.NodeHash)))
@@ -146,6 +149,60 @@ func (s *ControlPlaneService) DeleteAllLeases(platformID string) error {
 	}
 	s.Router.DeleteAllLeases(platformID)
 	return nil
+}
+
+// BindLease binds (or rebinds) an account to a specific node on the given platform.
+// The node must be routable on the platform.
+func (s *ControlPlaneService) BindLease(platformID, account, nodeHashHex string) (*LeaseResponse, error) {
+	account = strings.TrimSpace(account)
+	if account == "" {
+		return nil, invalidArg("account: must be non-empty")
+	}
+	nodeHashHex = strings.TrimSpace(nodeHashHex)
+	h, err := node.ParseHex(nodeHashHex)
+	if err != nil {
+		return nil, invalidArg("node_hash: invalid format")
+	}
+
+	plat, ok := s.Pool.GetPlatform(platformID)
+	if !ok {
+		return nil, notFound("platform not found")
+	}
+
+	if !plat.View().Contains(h) {
+		return nil, notFound("node is not routable on this platform")
+	}
+
+	entry, ok := s.Pool.GetEntry(h)
+	if !ok {
+		return nil, notFound("node not found")
+	}
+	egressIP := entry.GetEgressIP()
+	if !egressIP.IsValid() {
+		return nil, invalidArg("node has no egress IP")
+	}
+
+	nowNs := time.Now().UnixNano()
+	ttlNs := plat.StickyTTLNs
+	if ttlNs <= 0 {
+		ttlNs = int64(24 * time.Hour) // default 24h
+	}
+
+	ml := model.Lease{
+		PlatformID:     platformID,
+		Account:        account,
+		NodeHash:       h.Hex(),
+		EgressIP:       egressIP.String(),
+		CreatedAtNs:    nowNs,
+		ExpiryNs:       nowNs + ttlNs,
+		LastAccessedNs: nowNs,
+	}
+	if err := s.Router.UpsertLease(ml); err != nil {
+		return nil, internal("bind lease", err)
+	}
+
+	resp := leaseToResponse(ml, s.resolveLeaseNodeTag(h))
+	return &resp, nil
 }
 
 // IPLoadEntry is the API response for IP load stats.

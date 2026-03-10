@@ -44,3 +44,14 @@ export type PlatformUpdateInput = {
   reverse_proxy_fixed_account_header?: string;
   allocation_policy?: PlatformAllocationPolicy;
 };
+
+export type LeaseResponse = {
+  platform_id: string;
+  account: string;
+  node_hash: string;
+  node_tag: string;
+  egress_ip: string;
+  created_at: string;
+  expiry: string;
+  last_accessed: string;
+};
