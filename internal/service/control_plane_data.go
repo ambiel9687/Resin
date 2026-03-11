@@ -296,12 +296,20 @@ func buildCreatePlatformRequest(e ExportPlatformEntry) CreatePlatformRequest {
 }
 
 func buildPlatformPatch(e ExportPlatformEntry) map[string]any {
+	regexFilters := e.RegexFilters
+	if regexFilters == nil {
+		regexFilters = []string{}
+	}
+	regionFilters := e.RegionFilters
+	if regionFilters == nil {
+		regionFilters = []string{}
+	}
 	patch := map[string]any{
-		"sticky_ttl":                          e.StickyTTL,
-		"regex_filters":                       e.RegexFilters,
-		"region_filters":                      e.RegionFilters,
-		"allocation_policy":                   e.AllocationPolicy,
-		"reverse_proxy_miss_action":           e.ReverseProxyMissAction,
+		"sticky_ttl":                           e.StickyTTL,
+		"regex_filters":                        regexFilters,
+		"region_filters":                       regionFilters,
+		"allocation_policy":                    e.AllocationPolicy,
+		"reverse_proxy_miss_action":            e.ReverseProxyMissAction,
 		"reverse_proxy_empty_account_behavior": e.ReverseProxyEmptyAccountBehavior,
 		"reverse_proxy_fixed_account_header":   e.ReverseProxyFixedAccountHeader,
 	}
