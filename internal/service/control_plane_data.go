@@ -330,12 +330,16 @@ func buildCreateSubscriptionRequest(e ExportSubscriptionEntry) CreateSubscriptio
 func buildSubscriptionPatch(e ExportSubscriptionEntry) map[string]any {
 	patch := map[string]any{
 		"name":                       strings.TrimSpace(e.Name),
-		"url":                        strings.TrimSpace(e.URL),
-		"content":                    e.Content,
 		"update_interval":            e.UpdateInterval,
 		"enabled":                    e.Enabled,
 		"ephemeral":                  e.Ephemeral,
 		"ephemeral_node_evict_delay": e.EphemeralNodeEvictDelay,
+	}
+	if e.SourceType == "remote" {
+		patch["url"] = strings.TrimSpace(e.URL)
+	}
+	if e.SourceType == "local" {
+		patch["content"] = e.Content
 	}
 	return patch
 }

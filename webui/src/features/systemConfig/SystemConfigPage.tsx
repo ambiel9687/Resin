@@ -1172,7 +1172,6 @@ export function SystemConfigPage() {
                 </Button>
               </div>
             </Card>
-          </div>
         </div>
       )}
     </section>
