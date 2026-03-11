@@ -1,5 +1,5 @@
 import { getStoredAuthToken } from "../auth/auth-store";
-import { apiRequest } from "../../lib/api-client";
+import { apiRequest, type JsonValue } from "../../lib/api-client";
 import type { EnvConfig, RuntimeConfig, RuntimeConfigPatch } from "./types";
 
 const path = "/api/v1/system/config";
@@ -152,6 +152,6 @@ export async function importData(
 ): Promise<ImportResult> {
   return apiRequest<ImportResult>(`/api/v1/data/import?strategy=${strategy}`, {
     method: "POST",
-    body: payload as Record<string, unknown>,
+    body: payload as JsonValue,
   });
 }
