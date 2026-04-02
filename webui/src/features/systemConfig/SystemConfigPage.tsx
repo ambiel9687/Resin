@@ -17,7 +17,6 @@ import type { ImportResult } from "./api";
 import type { RuntimeConfig, RuntimeConfigPatch } from "./types";
 
 type RuntimeConfigForm = {
-  user_agent: string;
   request_log_enabled: boolean;
   reverse_proxy_log_detail_enabled: boolean;
   reverse_proxy_log_req_headers_max_bytes: string;
@@ -37,7 +36,6 @@ type RuntimeConfigForm = {
 };
 
 const EDITABLE_FIELDS: Array<keyof RuntimeConfig> = [
-  "user_agent",
   "request_log_enabled",
   "reverse_proxy_log_detail_enabled",
   "reverse_proxy_log_req_headers_max_bytes",
@@ -57,7 +55,6 @@ const EDITABLE_FIELDS: Array<keyof RuntimeConfig> = [
 ];
 
 const FIELD_LABELS: Record<keyof RuntimeConfig, string> = {
-  user_agent: "User-Agent",
   request_log_enabled: "启用请求日志",
   reverse_proxy_log_detail_enabled: "记录详细反代日志",
   reverse_proxy_log_req_headers_max_bytes: "请求头最大字节数",
@@ -95,7 +92,6 @@ const EMPTY_ACCOUNT_BEHAVIOR_LABELS: Record<string, string> = {
 
 function configToForm(config: RuntimeConfig): RuntimeConfigForm {
   return {
-    user_agent: config.user_agent,
     request_log_enabled: config.request_log_enabled,
     reverse_proxy_log_detail_enabled: config.reverse_proxy_log_detail_enabled,
     reverse_proxy_log_req_headers_max_bytes: String(config.reverse_proxy_log_req_headers_max_bytes),
@@ -149,11 +145,6 @@ function parseAuthorities(raw: string): string[] {
 }
 
 function parseForm(form: RuntimeConfigForm): RuntimeConfig {
-  const userAgent = form.user_agent.trim();
-  if (!userAgent) {
-    throw new Error("User-Agent 不能为空");
-  }
-
   const latencyURL = form.latency_test_url.trim();
   if (!latencyURL) {
     throw new Error("延迟测试目标 URL 不能为空");
@@ -163,7 +154,6 @@ function parseForm(form: RuntimeConfigForm): RuntimeConfig {
   }
 
   return {
-    user_agent: userAgent,
     request_log_enabled: form.request_log_enabled,
     reverse_proxy_log_detail_enabled: form.reverse_proxy_log_detail_enabled,
     reverse_proxy_log_req_headers_max_bytes: parseNonNegativeInt(
@@ -631,20 +621,6 @@ export function SystemConfigPage() {
               <section className="syscfg-section">
                 <h4>{t("基础与健康检查")}</h4>
                 <div className="form-grid">
-                  <div className="field-group">
-                    <div style={{ display: "flex", alignItems: "center" }}>
-                      <label className="field-label" htmlFor="sys-user-agent" style={{ margin: 0 }}>
-                        User-Agent
-                      </label>
-                      {renderRestoreButton("user_agent")}
-                    </div>
-                    <Input
-                      id="sys-user-agent"
-                      value={form.user_agent}
-                      onChange={(event) => setFormField("user_agent", event.target.value)}
-                    />
-                  </div>
-
                   <div className="field-group">
                     <div style={{ display: "flex", alignItems: "center" }}>
                       <label className="field-label" htmlFor="sys-max-fail" style={{ margin: 0 }}>

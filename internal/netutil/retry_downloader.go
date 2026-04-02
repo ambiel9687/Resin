@@ -81,11 +81,20 @@ func shouldRetryViaProxy(err error) bool {
 
 	var statusErr *HTTPStatusError
 	if errors.As(err, &statusErr) {
-		return false
+		return shouldRetryHTTPStatusCode(statusErr.StatusCode)
 	}
 
 	var nonRetryable *NonRetryableError
 	return !errors.As(err, &nonRetryable)
+}
+
+func shouldRetryHTTPStatusCode(statusCode int) bool {
+	switch statusCode {
+	case 403, 429, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *RetryDownloader) proxyAttemptTimeout() time.Duration {

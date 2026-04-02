@@ -436,6 +436,55 @@ func TestListNodes_RegionFilterAndSummaryPreferStoredRegion(t *testing.T) {
 	}
 }
 
+func TestListNodes_EnabledFilter(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	pool := newNodeListTestPool(subMgr)
+
+	subEnabled := subscription.NewSubscription("sub-enabled", "sub-enabled", "https://example.com/enabled", true, false)
+	subDisabled := subscription.NewSubscription("sub-disabled", "sub-disabled", "https://example.com/disabled", false, false)
+	subMgr.Register(subEnabled)
+	subMgr.Register(subDisabled)
+
+	enabledHash := addRoutableNodeForSubscription(
+		t,
+		pool,
+		subEnabled,
+		[]byte(`{"type":"ss","server":"1.1.1.1","port":443}`),
+		"203.0.113.70",
+	)
+	disabledHash := addRoutableNodeForSubscription(
+		t,
+		pool,
+		subDisabled,
+		[]byte(`{"type":"ss","server":"2.2.2.2","port":443}`),
+		"203.0.113.71",
+	)
+
+	cp := &ControlPlaneService{
+		Pool:   pool,
+		SubMgr: subMgr,
+		GeoIP:  &geoip.Service{},
+	}
+
+	enabled := true
+	nodes, err := cp.ListNodes(NodeFilters{Enabled: &enabled})
+	if err != nil {
+		t.Fatalf("ListNodes(enabled=true): %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].NodeHash != enabledHash.Hex() {
+		t.Fatalf("enabled filter result = %+v, want [%s]", nodes, enabledHash.Hex())
+	}
+
+	disabled := false
+	nodes, err = cp.ListNodes(NodeFilters{Enabled: &disabled})
+	if err != nil {
+		t.Fatalf("ListNodes(enabled=false): %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].NodeHash != disabledHash.Hex() {
+		t.Fatalf("disabled filter result = %+v, want [%s]", nodes, disabledHash.Hex())
+	}
+}
+
 func TestProbeEgress_ReturnsRegion(t *testing.T) {
 	subMgr := topology.NewSubscriptionManager()
 	pool := newNodeListTestPool(subMgr)

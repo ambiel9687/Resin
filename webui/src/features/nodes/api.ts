@@ -11,6 +11,8 @@ const basePath = "/api/v1/nodes";
 
 type ApiNodeSummary = Omit<NodeSummary, "tags"> & {
   tags?: NodeSummary["tags"] | null;
+  enabled?: boolean | null;
+  display_tag?: string | null;
   last_error?: string | null;
   circuit_open_since?: string | null;
   egress_ip?: string | null;
@@ -26,6 +28,8 @@ function normalizeNode(raw: ApiNodeSummary): NodeSummary {
   const { reference_latency_ms, ...rest } = raw;
   const normalized: NodeSummary = {
     ...rest,
+    enabled: raw.enabled !== false,
+    display_tag: raw.display_tag || "",
     tags: Array.isArray(raw.tags) ? raw.tags : [],
     last_error: raw.last_error || "",
     circuit_open_since: raw.circuit_open_since || "",
@@ -76,6 +80,9 @@ export async function listNodes(filters: NodeListQuery): Promise<PageResponse<No
   }
   if (filters.has_outbound !== undefined) {
     query.set("has_outbound", String(filters.has_outbound));
+  }
+  if (filters.enabled !== undefined) {
+    query.set("enabled", String(filters.enabled));
   }
 
   const data = await apiRequest<PageResponse<ApiNodeSummary>>(`${basePath}?${query.toString()}`);

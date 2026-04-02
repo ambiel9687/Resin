@@ -5,9 +5,6 @@ import "time"
 // RuntimeConfig holds all hot-updatable global settings.
 // These are persisted in the database and served via GET /system/config.
 type RuntimeConfig struct {
-	// Basic
-	UserAgent string `json:"user_agent"`
-
 	// Request log
 	RequestLogEnabled                  bool `json:"request_log_enabled"`
 	ReverseProxyLogDetailEnabled       bool `json:"reverse_proxy_log_detail_enabled"`
@@ -39,8 +36,6 @@ type RuntimeConfig struct {
 // values specified in DESIGN.md §运行时全局设置项.
 func NewDefaultRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
-		UserAgent: "sing-box",
-
 		RequestLogEnabled:                  true,
 		ReverseProxyLogDetailEnabled:       false,
 		ReverseProxyLogReqHeadersMaxBytes:  4096,

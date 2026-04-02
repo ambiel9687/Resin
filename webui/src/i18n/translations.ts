@@ -280,6 +280,9 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "满足所有正则表达式的节点才会被选择":
     "Only nodes that satisfy all regex expressions will be selected.",
   "每行一条，如 hk / us": "One per line, e.g. hk / us",
+  "每行一条，如 hk / us / !hk": "One per line, e.g. hk / us / !hk",
+  "支持反选：以 ! 开头可排除地区（如 !hk）。可与正选混用，最终结果为“先正选再排除”。":
+    "Supports exclusion: prefix a region with ! to exclude it, such as !hk. You can mix include and exclude rules; the final result is include first, then exclude.",
   "每行一个 header，例如 Authorization": "One header per line, e.g. Authorization",
   "输入地址查看命中规则和请求头。": "Enter URL to view matched rule and headers.",
   "命中前缀：": "Matched prefix:",
@@ -506,8 +509,8 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "关闭详情面板": "Close detail panel",
   "规则编辑抽屉": "Rule edit drawer",
   "过滤规则与分配策略": "Filtering rules and allocation policy",
-  "禁用订阅后，节点不会进入各平台的路由池，但不会从全局节点池中删除。":
-    "After disabling a subscription, nodes won't enter platform routing pools, but they will remain in the global node pool.",
+  "禁用订阅后，相关节点不会参与平台路由、健康统计或自动探测。":
+    "After disabling a subscription, related nodes will not participate in platform routing, health statistics, or automatic probing.",
   "临时订阅的非健康节点会在一段时间后被自动删除。订阅本身不会被删除。":
     "Unhealthy nodes in temporary subscriptions will be auto-removed after a delay. The subscription itself will not be deleted.",
   "开始测试": "Start test",

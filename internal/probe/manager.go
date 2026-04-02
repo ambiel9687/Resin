@@ -3,14 +3,17 @@ package probe
 import (
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Resinat/Resin/internal/netutil"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/scanloop"
 	"github.com/Resinat/Resin/internal/topology"
+	"github.com/puzpuzpuz/xsync/v4"
 )
 
 // Fetcher executes an HTTP request through the given node, returning
@@ -21,7 +24,10 @@ type Fetcher func(hash node.Hash, url string) (body []byte, latency time.Duratio
 // Field names align 1:1 with RuntimeConfig to prevent mis-wiring.
 type ProbeConfig struct {
 	Pool        *topology.GlobalNodePool
-	Concurrency int // max concurrent probes
+	Concurrency int // number of async probe workers
+	// QueueCapacity is the per-priority async queue capacity.
+	// If <= 0, defaults to max(1024, Concurrency*4).
+	QueueCapacity int
 
 	// Fetcher executes HTTP via node hash. Injectable for testing.
 	Fetcher Fetcher
@@ -37,16 +43,24 @@ type ProbeConfig struct {
 	// OnProbeEvent is called after each probe attempt completes (egress or latency).
 	// The kind parameter is "egress" or "latency".
 	OnProbeEvent func(kind string)
+
+	// ChooseNormalWhenBoth chooses whether to pop normal-priority queue when
+	// both high and normal queues are non-empty.
+	// Nil defaults to 10% chance.
+	ChooseNormalWhenBoth func() bool
 }
 
 // ProbeManager schedules and executes active probes against nodes in the pool.
 // It holds a direct reference to *topology.GlobalNodePool (no interface).
 type ProbeManager struct {
-	pool    *topology.GlobalNodePool
-	sem     chan struct{}
-	stopCh  chan struct{}
-	wg      sync.WaitGroup
-	fetcher Fetcher
+	pool        *topology.GlobalNodePool
+	stopCh      chan struct{}
+	stopOnce    sync.Once
+	wg          sync.WaitGroup
+	fetcher     Fetcher
+	workerCount int
+	taskQueue   *probeTaskQueue
+	taskStates  *xsync.Map[probeTaskKey, *probeTaskState]
 
 	maxEgressTestInterval           func() time.Duration
 	maxLatencyTestInterval          func() time.Duration
@@ -60,7 +74,166 @@ const (
 	egressTraceURL        = "https://cloudflare.com/cdn-cgi/trace"
 	egressTraceDomain     = "cloudflare.com"
 	defaultLatencyTestURL = "https://www.gstatic.com/generate_204"
+	defaultQueueCap       = 1024
 )
+
+type probePriority uint8
+
+const (
+	probePriorityNormal probePriority = iota
+	probePriorityHigh
+)
+
+type probeTaskKind uint8
+
+const (
+	probeTaskKindEgress probeTaskKind = iota
+	probeTaskKindLatency
+)
+
+type probeTaskKey struct {
+	hash node.Hash
+	kind probeTaskKind
+}
+
+type probeTask struct {
+	key probeTaskKey
+}
+
+type probeTaskState struct {
+	flags atomic.Uint32
+}
+
+const (
+	taskFlagQueued uint32 = 1 << iota
+	taskFlagRunning
+	taskFlagDirty
+	taskFlagDirtyHigh
+	taskFlagQueuedHigh
+)
+
+type probeTaskBuffer struct {
+	items []probeTask
+	head  int
+}
+
+func (b *probeTaskBuffer) len() int {
+	return len(b.items) - b.head
+}
+
+func (b *probeTaskBuffer) push(task probeTask) {
+	b.items = append(b.items, task)
+}
+
+func (b *probeTaskBuffer) pop() probeTask {
+	task := b.items[b.head]
+	b.head++
+	if b.head >= len(b.items) {
+		b.items = nil
+		b.head = 0
+		return task
+	}
+	if b.head > 64 && b.head*2 >= len(b.items) {
+		b.items = append([]probeTask(nil), b.items[b.head:]...)
+		b.head = 0
+	}
+	return task
+}
+
+func (b *probeTaskBuffer) clear() {
+	b.items = nil
+	b.head = 0
+}
+
+type probeTaskQueue struct {
+	mu                   sync.Mutex
+	notEmpty             *sync.Cond
+	high                 probeTaskBuffer
+	normal               probeTaskBuffer
+	highCap              int
+	normalCap            int
+	stopped              bool
+	chooseNormalWhenBoth func() bool
+}
+
+func newProbeTaskQueue(highCap, normalCap int, chooseNormalWhenBoth func() bool) *probeTaskQueue {
+	if highCap <= 0 {
+		highCap = defaultQueueCap
+	}
+	if normalCap <= 0 {
+		normalCap = defaultQueueCap
+	}
+	if chooseNormalWhenBoth == nil {
+		chooseNormalWhenBoth = func() bool { return rand.IntN(10) == 0 }
+	}
+	q := &probeTaskQueue{
+		highCap:              highCap,
+		normalCap:            normalCap,
+		chooseNormalWhenBoth: chooseNormalWhenBoth,
+	}
+	q.notEmpty = sync.NewCond(&q.mu)
+	return q
+}
+
+func (q *probeTaskQueue) Enqueue(task probeTask, priority probePriority) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.stopped {
+		return false
+	}
+
+	switch priority {
+	case probePriorityHigh:
+		if q.high.len() >= q.highCap {
+			return false
+		}
+		q.high.push(task)
+	default:
+		if q.normal.len() >= q.normalCap {
+			return false
+		}
+		q.normal.push(task)
+	}
+
+	q.notEmpty.Signal()
+	return true
+}
+
+func (q *probeTaskQueue) Dequeue() (probeTask, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for {
+		if q.stopped {
+			return probeTask{}, false
+		}
+
+		highLen := q.high.len()
+		normalLen := q.normal.len()
+		switch {
+		case highLen > 0 && normalLen > 0:
+			if q.chooseNormalWhenBoth() {
+				return q.normal.pop(), true
+			}
+			return q.high.pop(), true
+		case highLen > 0:
+			return q.high.pop(), true
+		case normalLen > 0:
+			return q.normal.pop(), true
+		default:
+			q.notEmpty.Wait()
+		}
+	}
+}
+
+func (q *probeTaskQueue) StopDropPending() {
+	q.mu.Lock()
+	q.stopped = true
+	q.high.clear()
+	q.normal.clear()
+	q.mu.Unlock()
+	q.notEmpty.Broadcast()
+}
 
 type egressProbeErrorStage int
 
@@ -76,11 +249,21 @@ func NewProbeManager(cfg ProbeConfig) *ProbeManager {
 	if conc <= 0 {
 		conc = 8
 	}
+	queueCap := cfg.QueueCapacity
+	if queueCap <= 0 {
+		queueCap = conc * 4
+		if queueCap < defaultQueueCap {
+			queueCap = defaultQueueCap
+		}
+	}
+
 	return &ProbeManager{
 		pool:                            cfg.Pool,
-		sem:                             make(chan struct{}, conc),
 		stopCh:                          make(chan struct{}),
 		fetcher:                         cfg.Fetcher,
+		workerCount:                     conc,
+		taskQueue:                       newProbeTaskQueue(queueCap, queueCap, cfg.ChooseNormalWhenBoth),
+		taskStates:                      xsync.NewMap[probeTaskKey, *probeTaskState](),
 		maxEgressTestInterval:           cfg.MaxEgressTestInterval,
 		maxLatencyTestInterval:          cfg.MaxLatencyTestInterval,
 		maxAuthorityLatencyTestInterval: cfg.MaxAuthorityLatencyTestInterval,
@@ -108,56 +291,41 @@ func (m *ProbeManager) Start() {
 		defer m.wg.Done()
 		scanloop.Run(m.stopCh, scanloop.DefaultMinInterval, scanloop.DefaultJitterRange, m.scanLatency)
 	}()
+
+	for i := 0; i < m.workerCount; i++ {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.runProbeWorker()
+		}()
+	}
 }
 
 // Stop signals all probe workers to stop and waits for completion.
 //
 // Design note:
-//   - Immediate probes are accounted in wg, so in-flight TriggerImmediateEgressProbe
-//     work is drained before Stop returns.
-//   - We intentionally do not add extra lifecycle state (e.g. stopping flag/mutex)
-//     to reject post-stop triggers here. Expected ownership is that callers stop
-//     upstream schedulers/event sources before calling Stop.
+//   - In-flight worker tasks are drained before Stop returns.
+//   - Pending queued tasks are dropped on stop.
+//   - We intentionally do not reject post-stop triggers via extra manager-global
+//     state; expected ownership is that callers stop upstream event sources first.
 func (m *ProbeManager) Stop() {
-	close(m.stopCh)
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+		m.taskQueue.StopDropPending()
+	})
 	m.wg.Wait()
 }
 
-// TriggerImmediateEgressProbe fires an async egress probe for a node.
-// The goroutine waits for a semaphore slot (or stop signal), never drops.
+// TriggerImmediateEgressProbe enqueues an async egress probe for a node.
 // Caller returns immediately.
-//
-// Design note:
-//   - This method always increments wg so Stop can wait for any in-flight
-//     immediate probe goroutine.
-//   - Stop-trigger ordering is a caller contract; this method does not enforce
-//     a "reject after stop" policy with additional manager-global state.
-//   - Tradeoff: we spawn first, then acquire sem in the goroutine. This keeps
-//     callers non-blocking and preserves "never drop" semantics. Under bursty
-//     triggers, waiting goroutine count may rise, but actual outbound probe
-//     concurrency is still hard-limited by sem capacity.
 func (m *ProbeManager) TriggerImmediateEgressProbe(hash node.Hash) {
-	m.wg.Add(1)
+	m.enqueueProbe(hash, probeTaskKindEgress, probePriorityNormal)
+}
 
-	go func() {
-		defer m.wg.Done()
-		select {
-		case m.sem <- struct{}{}:
-			defer func() { <-m.sem }()
-		case <-m.stopCh:
-			return // shutting down
-		}
-
-		entry, ok := m.pool.GetEntry(hash)
-		if !ok {
-			return
-		}
-		if entry.Outbound.Load() == nil {
-			return // nil outbound → skip
-		}
-
-		m.probeEgress(hash, entry)
-	}()
+// TriggerImmediateLatencyProbe enqueues an async latency probe for a node.
+// Caller returns immediately.
+func (m *ProbeManager) TriggerImmediateLatencyProbe(hash node.Hash) {
+	m.enqueueProbe(hash, probeTaskKindLatency, probePriorityNormal)
 }
 
 // EgressProbeResult holds the results of a synchronous egress probe.
@@ -173,6 +341,11 @@ func (m *ProbeManager) ProbeEgressSync(hash node.Hash) (*EgressProbeResult, erro
 	if m.fetcher == nil {
 		return nil, fmt.Errorf("no probe fetcher configured")
 	}
+	select {
+	case <-m.stopCh:
+		return nil, fmt.Errorf("probe manager stopped")
+	default:
+	}
 
 	entry, ok := m.pool.GetEntry(hash)
 	if !ok {
@@ -180,14 +353,6 @@ func (m *ProbeManager) ProbeEgressSync(hash node.Hash) (*EgressProbeResult, erro
 	}
 	if entry.Outbound.Load() == nil {
 		return nil, fmt.Errorf("node outbound not ready")
-	}
-
-	// Acquire semaphore (blocking, with stop-signal awareness).
-	select {
-	case m.sem <- struct{}{}:
-		defer func() { <-m.sem }()
-	case <-m.stopCh:
-		return nil, fmt.Errorf("probe manager stopped")
 	}
 
 	// Record synchronous probe attempts for metrics parity with async paths.
@@ -227,6 +392,11 @@ func (m *ProbeManager) ProbeLatencySync(hash node.Hash) (*LatencyProbeResult, er
 	if m.fetcher == nil {
 		return nil, fmt.Errorf("no probe fetcher configured")
 	}
+	select {
+	case <-m.stopCh:
+		return nil, fmt.Errorf("probe manager stopped")
+	default:
+	}
 
 	entry, ok := m.pool.GetEntry(hash)
 	if !ok {
@@ -238,13 +408,6 @@ func (m *ProbeManager) ProbeLatencySync(hash node.Hash) (*LatencyProbeResult, er
 
 	testURL := m.currentLatencyTestURL()
 	domain := netutil.ExtractDomain(testURL)
-
-	select {
-	case m.sem <- struct{}{}:
-		defer func() { <-m.sem }()
-	case <-m.stopCh:
-		return nil, fmt.Errorf("probe manager stopped")
-	}
 
 	// Record synchronous probe attempts for metrics parity with async paths.
 	if m.onProbeEvent != nil {
@@ -276,6 +439,7 @@ func (m *ProbeManager) scanEgress() {
 		interval = m.maxEgressTestInterval()
 	}
 	lookahead := 15 * time.Second
+	subLookup := m.pool.MakeSubLookup()
 
 	m.pool.Range(func(h node.Hash, entry *node.NodeEntry) bool {
 		// Check stop signal.
@@ -283,6 +447,10 @@ func (m *ProbeManager) scanEgress() {
 		case <-m.stopCh:
 			return false
 		default:
+		}
+
+		if entry.IsDisabledBySubscriptions(subLookup) {
+			return true // disabled node -> skip periodic probe
 		}
 
 		if entry.Outbound.Load() == nil {
@@ -298,19 +466,7 @@ func (m *ProbeManager) scanEgress() {
 			}
 		}
 
-		// Acquire sem or skip on shutdown.
-		select {
-		case m.sem <- struct{}{}:
-		case <-m.stopCh:
-			return false
-		}
-
-		m.wg.Add(1)
-		go func() {
-			defer m.wg.Done()
-			defer func() { <-m.sem }()
-			m.probeEgress(h, entry)
-		}()
+		m.enqueueProbe(h, probeTaskKindEgress, probePriorityNormal)
 
 		return true
 	})
@@ -328,7 +484,7 @@ func (m *ProbeManager) scanLatency() {
 		maxAuthorityInterval = m.maxAuthorityLatencyTestInterval()
 	}
 	lookahead := 15 * time.Second
-	testURL := m.currentLatencyTestURL()
+	subLookup := m.pool.MakeSubLookup()
 	var authorities []string
 	if m.latencyAuthorities != nil {
 		authorities = m.latencyAuthorities()
@@ -341,6 +497,10 @@ func (m *ProbeManager) scanLatency() {
 		default:
 		}
 
+		if entry.IsDisabledBySubscriptions(subLookup) {
+			return true // disabled node -> skip periodic probe
+		}
+
 		if entry.Outbound.Load() == nil {
 			return true // skip nil outbound
 		}
@@ -349,21 +509,196 @@ func (m *ProbeManager) scanLatency() {
 			return true
 		}
 
-		// Acquire sem or skip on shutdown.
-		select {
-		case m.sem <- struct{}{}:
-		case <-m.stopCh:
-			return false
-		}
-
-		m.wg.Add(1)
-		go func() {
-			defer m.wg.Done()
-			defer func() { <-m.sem }()
-			m.probeLatency(h, entry, testURL)
-		}()
+		m.enqueueProbe(h, probeTaskKindLatency, probePriorityNormal)
 
 		return true
+	})
+}
+
+func (m *ProbeManager) runProbeWorker() {
+	for {
+		task, ok := m.taskQueue.Dequeue()
+		if !ok {
+			return
+		}
+
+		state, ok := m.markTaskRunning(task.key)
+		if !ok {
+			continue
+		}
+
+		m.executeTask(task)
+		m.finishTask(task.key, state)
+	}
+}
+
+func (m *ProbeManager) executeTask(task probeTask) {
+	entry, ok := m.pool.GetEntry(task.key.hash)
+	if !ok || entry.Outbound.Load() == nil {
+		return
+	}
+	if entry.IsDisabledBySubscriptions(m.pool.MakeSubLookup()) {
+		return
+	}
+
+	switch task.key.kind {
+	case probeTaskKindEgress:
+		m.probeEgress(task.key.hash, entry)
+	case probeTaskKindLatency:
+		m.probeLatency(task.key.hash, entry, m.currentLatencyTestURL())
+	}
+}
+
+func (m *ProbeManager) enqueueProbe(hash node.Hash, kind probeTaskKind, priority probePriority) bool {
+	key := probeTaskKey{hash: hash, kind: kind}
+	state, _ := m.taskStates.LoadOrCompute(key, func() (*probeTaskState, bool) {
+		return &probeTaskState{}, false
+	})
+	allowQueuedHighUpgrade := priority == probePriorityHigh
+
+	for {
+		flags := state.flags.Load()
+		if flags&taskFlagRunning != 0 {
+			next := flags | taskFlagDirty
+			if priority == probePriorityHigh {
+				next |= taskFlagDirtyHigh
+			}
+			if state.flags.CompareAndSwap(flags, next) {
+				return false
+			}
+			continue
+		}
+
+		if flags&taskFlagQueued != 0 {
+			// If a normal-priority task is already queued, add a high-priority token
+			// so the next dequeue can observe the upgraded urgency. The stale normal
+			// token will later no-op when it reaches a worker.
+			if allowQueuedHighUpgrade && flags&taskFlagQueuedHigh == 0 {
+				next := flags | taskFlagQueuedHigh
+				if !state.flags.CompareAndSwap(flags, next) {
+					continue
+				}
+				if m.taskQueue.Enqueue(probeTask{key: key}, probePriorityHigh) {
+					return true
+				}
+				for {
+					current := state.flags.Load()
+					revert := current &^ taskFlagQueuedHigh
+					if state.flags.CompareAndSwap(current, revert) {
+						break
+					}
+				}
+				allowQueuedHighUpgrade = false
+				continue
+			}
+
+			next := flags | taskFlagDirty
+			if priority == probePriorityHigh {
+				next |= taskFlagDirtyHigh
+			}
+			if state.flags.CompareAndSwap(flags, next) {
+				return false
+			}
+			continue
+		}
+
+		next := flags | taskFlagQueued
+		if priority == probePriorityHigh {
+			next |= taskFlagQueuedHigh
+		} else {
+			next &^= taskFlagQueuedHigh
+		}
+		if !state.flags.CompareAndSwap(flags, next) {
+			continue
+		}
+
+		if m.taskQueue.Enqueue(probeTask{key: key}, priority) {
+			return true
+		}
+
+		m.clearDroppedState(state)
+		m.tryDeleteTaskState(key, state)
+		return false
+	}
+}
+
+func (m *ProbeManager) markTaskRunning(key probeTaskKey) (*probeTaskState, bool) {
+	state, ok := m.taskStates.Load(key)
+	if !ok {
+		return nil, false
+	}
+
+	for {
+		flags := state.flags.Load()
+		if flags&taskFlagQueued == 0 {
+			m.tryDeleteTaskState(key, state)
+			return nil, false
+		}
+		next := (flags | taskFlagRunning) &^ (taskFlagQueued | taskFlagQueuedHigh)
+		if state.flags.CompareAndSwap(flags, next) {
+			return state, true
+		}
+	}
+}
+
+func (m *ProbeManager) finishTask(key probeTaskKey, state *probeTaskState) {
+	requeue := false
+	requeuePriority := probePriorityNormal
+
+	for {
+		flags := state.flags.Load()
+		next := flags &^ taskFlagRunning
+		requeue = false
+
+		if flags&taskFlagDirty != 0 {
+			requeue = true
+			next |= taskFlagQueued
+			next &^= taskFlagDirty
+			if flags&taskFlagDirtyHigh != 0 {
+				next |= taskFlagQueuedHigh
+				next &^= taskFlagDirtyHigh
+				requeuePriority = probePriorityHigh
+			} else {
+				next &^= taskFlagQueuedHigh
+				requeuePriority = probePriorityNormal
+			}
+		} else {
+			next &^= (taskFlagDirty | taskFlagDirtyHigh | taskFlagQueuedHigh)
+		}
+
+		if state.flags.CompareAndSwap(flags, next) {
+			break
+		}
+	}
+
+	if requeue {
+		if !m.taskQueue.Enqueue(probeTask{key: key}, requeuePriority) {
+			m.clearDroppedState(state)
+		}
+	}
+
+	m.tryDeleteTaskState(key, state)
+}
+
+func (m *ProbeManager) clearDroppedState(state *probeTaskState) {
+	for {
+		flags := state.flags.Load()
+		next := flags &^ (taskFlagQueued | taskFlagQueuedHigh | taskFlagDirty | taskFlagDirtyHigh)
+		if state.flags.CompareAndSwap(flags, next) {
+			return
+		}
+	}
+}
+
+func (m *ProbeManager) tryDeleteTaskState(key probeTaskKey, state *probeTaskState) {
+	m.taskStates.Compute(key, func(current *probeTaskState, loaded bool) (*probeTaskState, xsync.ComputeOp) {
+		if !loaded || current != state {
+			return current, xsync.CancelOp
+		}
+		if current.flags.Load() != 0 {
+			return current, xsync.CancelOp
+		}
+		return nil, xsync.DeleteOp
 	})
 }
 

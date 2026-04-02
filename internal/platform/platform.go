@@ -3,7 +3,6 @@ package platform
 import (
 	"net/netip"
 	"regexp"
-	"slices"
 	"sync"
 
 	"github.com/Resinat/Resin/internal/node"
@@ -31,7 +30,7 @@ type Platform struct {
 
 	// Filter configuration.
 	RegexFilters  []*regexp.Regexp
-	RegionFilters []string // lowercase ISO codes
+	RegionFilters []string // lowercase ISO codes, supports negation "!xx"
 
 	// Other config fields.
 	StickyTTLNs                      int64
@@ -114,6 +113,11 @@ func (p *Platform) evaluateNode(
 	subLookup node.SubLookupFunc,
 	geoLookup GeoLookupFunc,
 ) bool {
+	// 0. Disabled nodes are never routable.
+	if entry.IsDisabledBySubscriptions(subLookup) {
+		return false
+	}
+
 	// 1. Healthy for routing (outbound ready + circuit not open).
 	if !entry.IsHealthy() {
 		return false
@@ -133,7 +137,7 @@ func (p *Platform) evaluateNode(
 	// 4. Region filter (when configured).
 	if len(p.RegionFilters) > 0 {
 		region := entry.GetRegion(geoLookup)
-		if !matchRegion(region, p.RegionFilters) {
+		if !MatchRegionFilter(region, p.RegionFilters) {
 			return false
 		}
 	}
@@ -146,7 +150,36 @@ func (p *Platform) evaluateNode(
 	return true
 }
 
-// matchRegion checks if the region is in the allowed list.
-func matchRegion(region string, allowed []string) bool {
-	return slices.Contains(allowed, region)
+// MatchRegionFilter applies include/exclude region filters.
+// Positive entries (xx) build an include set; negative entries (!xx) build an exclude set.
+// Unknown regions never match when region filters are configured.
+// Final result is: region known AND (include empty OR region in include) AND (region not in exclude).
+func MatchRegionFilter(region string, filters []string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	if region == "" {
+		return false
+	}
+
+	included := false
+	hasInclude := false
+
+	for _, filter := range filters {
+		if len(filter) > 0 && filter[0] == '!' {
+			if region == filter[1:] {
+				return false
+			}
+			continue
+		}
+		hasInclude = true
+		if region == filter {
+			included = true
+		}
+	}
+
+	if hasInclude && !included {
+		return false
+	}
+	return true
 }

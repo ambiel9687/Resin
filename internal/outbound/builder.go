@@ -48,6 +48,12 @@ func NewSingboxBuilder() (*SingboxBuilder, error) {
 	logFactory := log.NewNOPFactory()
 	logger := logFactory.NewLogger("resin-outbound")
 
+	dnsRegistry, ok := service.FromContext[adapter.DNSTransportRegistry](ctx).(*dns.TransportRegistry)
+	if !ok {
+		return nil, fmt.Errorf("singbox builder: unexpected DNS transport registry type %T", service.FromContext[adapter.DNSTransportRegistry](ctx))
+	}
+	registerSecureDNSTransport(dnsRegistry)
+
 	// --- Service graph (same order as Demos/simple-proxy/main.go) -----------
 
 	// Endpoint Manager
@@ -63,16 +69,17 @@ func NewSingboxBuilder() (*SingboxBuilder, error) {
 	service.MustRegister[adapter.OutboundManager](ctx, outboundMgr)
 
 	// DNS Transport Manager
-	dnsTransportMgr := dns.NewTransportManager(logger, service.FromContext[adapter.DNSTransportRegistry](ctx), outboundMgr, "")
+	dnsTransportMgr := dns.NewTransportManager(logger, service.FromContext[adapter.DNSTransportRegistry](ctx), outboundMgr, secureDNSFailoverTransportTag)
 	service.MustRegister[adapter.DNSTransportManager](ctx, dnsTransportMgr)
 
 	// DNS Router
 	dnsRouter := dns.NewRouter(ctx, logFactory, option.DNSOptions{})
 	service.MustRegister[adapter.DNSRouter](ctx, dnsRouter)
 
-	// Register local DNS transport
-	if err := dnsTransportMgr.Create(ctx, logger, "local", "local", &option.LocalDNSServerOptions{}); err != nil {
-		return nil, fmt.Errorf("singbox builder: create local DNS transport: %w", err)
+	for _, spec := range secureDNSTransportSpecs() {
+		if err := dnsTransportMgr.Create(ctx, logger, spec.tag, spec.transportType, spec.options); err != nil {
+			return nil, fmt.Errorf("singbox builder: create DNS transport %s[%s]: %w", spec.transportType, spec.tag, err)
+		}
 	}
 
 	// Start DNS Transport Manager lifecycle

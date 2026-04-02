@@ -21,6 +21,8 @@ import (
 	"github.com/Resinat/Resin/internal/subscription"
 	"github.com/Resinat/Resin/internal/testutil"
 	"github.com/Resinat/Resin/internal/topology"
+	"github.com/sagernet/sing-box/adapter"
+	M "github.com/sagernet/sing/common/metadata"
 )
 
 type proxyE2EEnv struct {
@@ -88,6 +90,24 @@ func newProxyE2EEnv(t *testing.T) *proxyE2EEnv {
 	}
 }
 
+func setProxyE2EOutboundDialFunc(
+	t *testing.T,
+	env *proxyE2EEnv,
+	dialFunc func(ctx context.Context, network string, dest M.Socksaddr) (net.Conn, error),
+) {
+	t.Helper()
+
+	raw := json.RawMessage(`{"type":"stub","server":"127.0.0.1","server_port":1}`)
+	hash := node.HashFromRawOptions(raw)
+	entry, ok := env.pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("node not found in pool")
+	}
+	ob := &mockOutbound{dialFunc: dialFunc}
+	var wrapped adapter.Outbound = ob
+	entry.Outbound.Store(&wrapped)
+}
+
 func TestForwardProxy_E2EHTTPSuccess(t *testing.T) {
 	env := newProxyE2EEnv(t)
 	emitter := newMockEventEmitter()
@@ -141,6 +161,55 @@ func TestForwardProxy_E2EHTTPSuccess(t *testing.T) {
 		}
 		if logEv.IngressBytes < int64(len("forward-e2e")) {
 			t.Fatalf("IngressBytes: got %d, want >= %d", logEv.IngressBytes, len("forward-e2e"))
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected forward log event")
+	}
+}
+
+func TestForwardProxy_E2EHTTPDialTimeout_ZeroEgress(t *testing.T) {
+	env := newProxyE2EEnv(t)
+	emitter := newMockEventEmitter()
+	health := &mockHealthRecorder{}
+
+	setProxyE2EOutboundDialFunc(t, env, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		return nil, deadlineExceededErr{}
+	})
+
+	fp := NewForwardProxy(ForwardProxyConfig{
+		ProxyToken: "tok",
+		Router:     env.router,
+		Pool:       env.pool,
+		Health:     health,
+		Events:     emitter,
+	})
+
+	body := strings.Repeat("a", 256*1024)
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/upload", strings.NewReader(body))
+	req.Header.Set("Proxy-Authorization", basicAuth("tok", "plat"))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	w := httptest.NewRecorder()
+
+	fp.ServeHTTP(w, req)
+
+	if w.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status: got %d, want %d (body=%q, resinErr=%q)",
+			w.Code, http.StatusGatewayTimeout, w.Body.String(), w.Header().Get("X-Resin-Error"))
+	}
+	if got := w.Header().Get("X-Resin-Error"); got != "UPSTREAM_TIMEOUT" {
+		t.Fatalf("X-Resin-Error: got %q, want %q", got, "UPSTREAM_TIMEOUT")
+	}
+
+	select {
+	case logEv := <-emitter.logCh:
+		if logEv.ResinError != "UPSTREAM_TIMEOUT" {
+			t.Fatalf("ResinError: got %q, want %q", logEv.ResinError, "UPSTREAM_TIMEOUT")
+		}
+		if logEv.UpstreamStage != "forward_roundtrip" {
+			t.Fatalf("UpstreamStage: got %q, want %q", logEv.UpstreamStage, "forward_roundtrip")
+		}
+		if logEv.EgressBytes != 0 {
+			t.Fatalf("EgressBytes: got %d, want 0 for dial-timeout before request write", logEv.EgressBytes)
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected forward log event")
@@ -230,6 +299,55 @@ func TestReverseProxy_E2ESuccess(t *testing.T) {
 	}
 	if got := w.Body.String(); got != "reverse-e2e" {
 		t.Fatalf("body: got %q, want %q", got, "reverse-e2e")
+	}
+}
+
+func TestReverseProxy_E2EDialTimeout_ZeroEgress(t *testing.T) {
+	env := newProxyE2EEnv(t)
+	emitter := newMockEventEmitter()
+	health := &mockHealthRecorder{}
+
+	setProxyE2EOutboundDialFunc(t, env, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		return nil, deadlineExceededErr{}
+	})
+
+	rp := NewReverseProxy(ReverseProxyConfig{
+		ProxyToken:     "tok",
+		Router:         env.router,
+		Pool:           env.pool,
+		PlatformLookup: env.pool,
+		Health:         health,
+		Events:         emitter,
+	})
+
+	body := strings.Repeat("b", 256*1024)
+	req := httptest.NewRequest(http.MethodPost, "/tok/plat:acct/http/example.com/upload", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	w := httptest.NewRecorder()
+
+	rp.ServeHTTP(w, req)
+
+	if w.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status: got %d, want %d (body=%q, resinErr=%q)",
+			w.Code, http.StatusGatewayTimeout, w.Body.String(), w.Header().Get("X-Resin-Error"))
+	}
+	if got := w.Header().Get("X-Resin-Error"); got != "UPSTREAM_TIMEOUT" {
+		t.Fatalf("X-Resin-Error: got %q, want %q", got, "UPSTREAM_TIMEOUT")
+	}
+
+	select {
+	case logEv := <-emitter.logCh:
+		if logEv.ResinError != "UPSTREAM_TIMEOUT" {
+			t.Fatalf("ResinError: got %q, want %q", logEv.ResinError, "UPSTREAM_TIMEOUT")
+		}
+		if logEv.UpstreamStage != "reverse_roundtrip" {
+			t.Fatalf("UpstreamStage: got %q, want %q", logEv.UpstreamStage, "reverse_roundtrip")
+		}
+		if logEv.EgressBytes != 0 {
+			t.Fatalf("EgressBytes: got %d, want 0 for dial-timeout before request write", logEv.EgressBytes)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected reverse log event")
 	}
 }
 

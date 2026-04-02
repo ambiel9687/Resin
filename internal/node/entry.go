@@ -153,6 +153,37 @@ func (e *NodeEntry) MatchRegexs(regexes []*regexp.Regexp, subLookup SubLookupFun
 	return false
 }
 
+// HasEnabledSubscription reports whether the node currently has at least one
+// enabled subscription reference, based on subLookup.
+//
+// subLookup must apply the caller's definition of "subscription still holds
+// this node" (for example, excluding evicted managed-node entries).
+func (e *NodeEntry) HasEnabledSubscription(subLookup SubLookupFunc) bool {
+	if e == nil || subLookup == nil {
+		return false
+	}
+
+	e.mu.RLock()
+	subs := make([]string, len(e.subscriptionIDs))
+	copy(subs, e.subscriptionIDs)
+	e.mu.RUnlock()
+
+	for _, subID := range subs {
+		_, enabled, _, ok := subLookup(subID, e.Hash)
+		if ok && enabled {
+			return true
+		}
+	}
+	return false
+}
+
+// IsDisabledBySubscriptions reports whether the node should be treated as
+// disabled: all referencing subscriptions are disabled (or missing/inapplicable
+// by subLookup semantics).
+func (e *NodeEntry) IsDisabledBySubscriptions(subLookup SubLookupFunc) bool {
+	return !e.HasEnabledSubscription(subLookup)
+}
+
 // matchesAll returns true if s matches every regex in the list.
 func matchesAll(s string, regexes []*regexp.Regexp) bool {
 	for _, re := range regexes {

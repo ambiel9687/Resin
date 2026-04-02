@@ -116,7 +116,7 @@ func newResinApp(envCfg *config.EnvConfig, engine *state.StateEngine) (*resinApp
 func (a *resinApp) initTopologyRuntime(engine *state.StateEngine) (*netutil.RetryDownloader, error) {
 	// Phase 1: Create DirectDownloader and RetryDownloader shell.
 	// NodePicker/ProxyFetch are nil initially; set after Pool + OutboundManager creation.
-	direct := newDirectDownloader(a.envCfg, a.runtimeCfg)
+	direct := newDirectDownloader(a.envCfg)
 	retryDL := &netutil.RetryDownloader{Direct: direct}
 
 	// Phase 2: Construct GeoIP service (start after retry downloader wiring).
@@ -220,7 +220,7 @@ func (a *resinApp) wireRetryDownloader(retryDL *netutil.RetryDownloader) {
 		return res.NodeHash, nil
 	}
 	retryDL.ProxyFetch = func(ctx context.Context, hash node.Hash, url string) ([]byte, error) {
-		body, _, err := a.topoRuntime.outboundMgr.FetchWithUserAgent(ctx, hash, url, currentDownloadUserAgent(a.runtimeCfg))
+		body, _, err := a.topoRuntime.outboundMgr.FetchWithUserAgent(ctx, hash, url, currentDownloadUserAgent())
 		return body, err
 	}
 	log.Println("RetryDownloader wiring complete")

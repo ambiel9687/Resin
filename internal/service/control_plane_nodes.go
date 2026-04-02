@@ -17,6 +17,7 @@ import (
 type NodeFilters struct {
 	PlatformID     *string
 	SubscriptionID *string
+	Enabled        *bool
 	Region         *string
 	CircuitOpen    *bool
 	HasOutbound    *bool
@@ -27,6 +28,11 @@ type NodeFilters struct {
 
 // ListNodes returns nodes from the pool with optional filters.
 func (s *ControlPlaneService) ListNodes(filters NodeFilters) ([]NodeSummary, error) {
+	var subLookup node.SubLookupFunc
+	if s != nil && s.Pool != nil {
+		subLookup = s.Pool.MakeSubLookup()
+	}
+
 	// If platform_id filter, get the platform view.
 	var platformView map[node.Hash]struct{}
 	if filters.PlatformID != nil {
@@ -59,7 +65,7 @@ func (s *ControlPlaneService) ListNodes(filters NodeFilters) ([]NodeSummary, err
 
 	var result []NodeSummary
 	appendIfMatched := func(h node.Hash, entry *node.NodeEntry) {
-		if !s.nodeEntryMatchesFilters(entry, filters) {
+		if !s.nodeEntryMatchesFilters(entry, filters, subLookup) {
 			return
 		}
 		result = append(result, s.nodeEntryToSummary(h, entry))
@@ -112,7 +118,22 @@ func (s *ControlPlaneService) ListNodes(filters NodeFilters) ([]NodeSummary, err
 	return result, nil
 }
 
-func (s *ControlPlaneService) nodeEntryMatchesFilters(entry *node.NodeEntry, filters NodeFilters) bool {
+func (s *ControlPlaneService) nodeEntryMatchesFilters(
+	entry *node.NodeEntry,
+	filters NodeFilters,
+	subLookup node.SubLookupFunc,
+) bool {
+	// Enabled/disabled filter.
+	if filters.Enabled != nil {
+		enabled := true
+		if subLookup != nil {
+			enabled = entry.HasEnabledSubscription(subLookup)
+		}
+		if enabled != *filters.Enabled {
+			return false
+		}
+	}
+
 	// Node tag fuzzy search filter.
 	if filters.TagKeyword != nil {
 		keyword := strings.ToLower(strings.TrimSpace(*filters.TagKeyword))

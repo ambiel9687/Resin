@@ -647,11 +647,13 @@ func TestAPIContract_PlatformListIncludesRoutableNodeCount(t *testing.T) {
 	srv, cp, _ := newControlPlaneTestServer(t)
 
 	platformID := mustCreatePlatform(t, srv, "routable-count-target")
-	cp.SubMgr.Register(subscription.NewSubscription("sub-test", "sub-test", "https://example.com/sub", true, false))
+	sub := subscription.NewSubscription("sub-test", "sub-test", "https://example.com/sub", true, false)
+	cp.SubMgr.Register(sub)
 
 	raw := []byte(`{"type":"ss","server":"1.1.1.1","port":443}`)
 	hash := node.HashFromRawOptions(raw)
 	cp.Pool.AddNodeFromSub(hash, raw, "sub-test")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"seed"}})
 
 	entry, ok := cp.Pool.GetEntry(hash)
 	if !ok {
@@ -1043,7 +1045,6 @@ func TestAPIContract_SystemDefaultConfigSnapshot(t *testing.T) {
 	srv, _, _ := newControlPlaneTestServer(t)
 
 	patchRec := doJSONRequest(t, srv, http.MethodPatch, "/api/v1/system/config", map[string]any{
-		"user_agent":               "custom-agent",
 		"request_log_enabled":      true,
 		"max_consecutive_failures": 9,
 	}, true)
@@ -1056,9 +1057,6 @@ func TestAPIContract_SystemDefaultConfigSnapshot(t *testing.T) {
 		t.Fatalf("default config status: got %d, want %d, body=%s", defaultRec.Code, http.StatusOK, defaultRec.Body.String())
 	}
 	defaultBody := decodeJSONMap(t, defaultRec)
-	if defaultBody["user_agent"] != "sing-box" {
-		t.Fatalf("default user_agent: got %v, want sing-box", defaultBody["user_agent"])
-	}
 	if defaultBody["request_log_enabled"] != true {
 		t.Fatalf("default request_log_enabled: got %v, want true", defaultBody["request_log_enabled"])
 	}
@@ -1071,9 +1069,6 @@ func TestAPIContract_SystemDefaultConfigSnapshot(t *testing.T) {
 		t.Fatalf("current config status: got %d, want %d, body=%s", currentRec.Code, http.StatusOK, currentRec.Body.String())
 	}
 	currentBody := decodeJSONMap(t, currentRec)
-	if currentBody["user_agent"] != "custom-agent" {
-		t.Fatalf("current user_agent: got %v, want custom-agent", currentBody["user_agent"])
-	}
 	if currentBody["request_log_enabled"] != true {
 		t.Fatalf("current request_log_enabled: got %v, want true", currentBody["request_log_enabled"])
 	}

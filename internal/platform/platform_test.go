@@ -201,6 +201,87 @@ func TestPlatform_EvaluateNode_RegionFilter_PrefersStoredRegion(t *testing.T) {
 	}
 }
 
+func TestPlatform_EvaluateNode_RegionFilter_ExcludeOnlyUnknownRegion(t *testing.T) {
+	p := NewPlatform("p1", "Test", nil, []string{"!hk"})
+	h := makeHash(`{"type":"ss"}`)
+	entry := makeFullyRoutableEntry(h, "sub1")
+
+	geoLookup := func(netip.Addr) string { return "" }
+	p.FullRebuild(func(fn func(node.Hash, *node.NodeEntry) bool) {
+		fn(h, entry)
+	}, alwaysLookup, geoLookup)
+
+	if p.View().Size() != 0 {
+		t.Fatal("node with unknown region should not be routable when region filters are configured")
+	}
+}
+
+func TestMatchRegionFilter(t *testing.T) {
+	tests := []struct {
+		name    string
+		filters []string
+		region  string
+		want    bool
+	}{
+		{
+			name:    "include only match",
+			filters: []string{"hk", "us"},
+			region:  "hk",
+			want:    true,
+		},
+		{
+			name:    "include only miss",
+			filters: []string{"hk", "us"},
+			region:  "jp",
+			want:    false,
+		},
+		{
+			name:    "exclude only",
+			filters: []string{"!hk"},
+			region:  "us",
+			want:    true,
+		},
+		{
+			name:    "exclude only blocked",
+			filters: []string{"!hk"},
+			region:  "hk",
+			want:    false,
+		},
+		{
+			name:    "exclude only unknown region",
+			filters: []string{"!hk"},
+			region:  "",
+			want:    false,
+		},
+		{
+			name:    "mixed include and exclude allows expected",
+			filters: []string{"hk", "!us"},
+			region:  "hk",
+			want:    true,
+		},
+		{
+			name:    "mixed include and exclude blocks excluded",
+			filters: []string{"hk", "!us"},
+			region:  "us",
+			want:    false,
+		},
+		{
+			name:    "mixed include and same exclude blocks",
+			filters: []string{"hk", "!hk"},
+			region:  "hk",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchRegionFilter(tt.region, tt.filters); got != tt.want {
+				t.Fatalf("MatchRegionFilter(%q, %v) = %v, want %v", tt.region, tt.filters, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPlatform_NotifyDirty_AddRemove(t *testing.T) {
 	p := NewPlatform("p1", "Test", nil, nil)
 	h := makeHash(`{"type":"ss"}`)

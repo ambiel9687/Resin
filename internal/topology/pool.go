@@ -289,21 +289,33 @@ func (p *GlobalNodePool) platformSnapshot() []*platform.Platform {
 // MakeSubLookup builds the SubLookupFunc closure for MatchRegexs / tag resolution.
 func (p *GlobalNodePool) MakeSubLookup() node.SubLookupFunc {
 	return func(subID string, hash node.Hash) (string, bool, []string, bool) {
+		// Compatibility fallback for test wiring that omits SubLookup.
+		// We cannot resolve subscription metadata, so treat the reference as
+		// "present+enabled" without tags.
+		if p.subLookup == nil {
+			return "", true, nil, true
+		}
+
 		sub := p.subLookup(subID)
 		if sub == nil {
 			return "", false, nil, false
 		}
-		managed, _ := sub.ManagedNodes().LoadNode(hash)
+
+		managed, ok := sub.ManagedNodes().LoadNode(hash)
+		if !ok || managed.Evicted {
+			return "", false, nil, false
+		}
 		tags := managed.Tags
 		return sub.Name(), sub.Enabled(), tags, true
 	}
 }
 
 // ResolveNodeDisplayTag resolves a node hash to its display tag for request logs.
-// Rule (DESIGN.md):
-//  1. Among subscriptions that hold this node, choose the earliest-created one.
+// Rule:
+//  1. Prefer enabled subscriptions: among enabled holders, choose earliest-created.
 //  2. Within that subscription, choose lexicographically smallest tag.
-//  3. Return "<SubscriptionName>/<Tag>".
+//  3. If no enabled holder exists, fallback to all holders with the same rule.
+//  4. Return "<SubscriptionName>/<Tag>".
 //
 // Returns empty string when resolution is not possible.
 func (p *GlobalNodePool) ResolveNodeDisplayTag(hash node.Hash) string {
@@ -320,50 +332,86 @@ func (p *GlobalNodePool) ResolveNodeDisplayTag(hash node.Hash) string {
 		return ""
 	}
 
-	bestFound := false
-	var bestCreatedAtNs int64
-	var bestSubID string
-	var bestSubName string
-	var bestTag string
+	pick := func(enabledOnly bool) (string, bool) {
+		bestFound := false
+		var bestCreatedAtNs int64
+		var bestSubID string
+		var bestSubName string
+		var bestTag string
 
-	for _, subID := range subIDs {
-		sub := p.subLookup(subID)
-		if sub == nil {
-			continue
-		}
+		for _, subID := range subIDs {
+			sub := p.subLookup(subID)
+			if sub == nil {
+				continue
+			}
+			if enabledOnly && !sub.Enabled() {
+				continue
+			}
 
-		managed, ok := sub.ManagedNodes().LoadNode(hash)
-		if !ok {
-			continue
-		}
-		tags := managed.Tags
-		if len(tags) == 0 {
-			continue
-		}
+			managed, ok := sub.ManagedNodes().LoadNode(hash)
+			if !ok || managed.Evicted {
+				continue
+			}
+			tags := managed.Tags
+			if len(tags) == 0 {
+				continue
+			}
 
-		smallestTag := tags[0]
-		for _, tag := range tags[1:] {
-			if tag < smallestTag {
-				smallestTag = tag
+			smallestTag := tags[0]
+			for _, tag := range tags[1:] {
+				if tag < smallestTag {
+					smallestTag = tag
+				}
+			}
+
+			createdAtNs := sub.CreatedAtNs
+			if !bestFound ||
+				createdAtNs < bestCreatedAtNs ||
+				(createdAtNs == bestCreatedAtNs && subID < bestSubID) {
+				bestFound = true
+				bestCreatedAtNs = createdAtNs
+				bestSubID = subID
+				bestSubName = sub.Name()
+				bestTag = smallestTag
 			}
 		}
 
-		createdAtNs := sub.CreatedAtNs
-		if !bestFound ||
-			createdAtNs < bestCreatedAtNs ||
-			(createdAtNs == bestCreatedAtNs && subID < bestSubID) {
-			bestFound = true
-			bestCreatedAtNs = createdAtNs
-			bestSubID = subID
-			bestSubName = sub.Name()
-			bestTag = smallestTag
+		if !bestFound || bestSubName == "" || bestTag == "" {
+			return "", false
 		}
+		return bestSubName + "/" + bestTag, true
 	}
 
-	if !bestFound || bestSubName == "" || bestTag == "" {
-		return ""
+	if tag, ok := pick(true); ok {
+		return tag
 	}
-	return bestSubName + "/" + bestTag
+	if tag, ok := pick(false); ok {
+		return tag
+	}
+	return ""
+}
+
+// IsNodeDisabled reports whether a node is disabled by subscription state:
+// all referencing subscriptions are disabled (or missing / not applicable).
+func (p *GlobalNodePool) IsNodeDisabled(hash node.Hash) bool {
+	entry, ok := p.GetEntry(hash)
+	if !ok || entry == nil {
+		return true
+	}
+	return entry.IsDisabledBySubscriptions(p.MakeSubLookup())
+}
+
+// MakeHealthyAndEnabledEvaluator builds a predicate for pool-context health
+// aggregates: the node must not be disabled by subscription state and must
+// satisfy the entry-local health checks.
+func (p *GlobalNodePool) MakeHealthyAndEnabledEvaluator() func(entry *node.NodeEntry) bool {
+	subLookup := p.MakeSubLookup()
+	return func(entry *node.NodeEntry) bool {
+		if entry == nil || entry.IsDisabledBySubscriptions(subLookup) {
+			return false
+		}
+		return entry.IsHealthy()
+	}
 }
 
 // notifyAllPlatformsDirty tells every registered platform to re-evaluate a node.

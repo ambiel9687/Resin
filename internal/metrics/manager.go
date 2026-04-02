@@ -13,6 +13,9 @@ import (
 
 // RuntimeStatsProvider supplies node-pool/platform/lease/latency stats from
 // the in-memory topology runtime.
+//
+// HealthyNodes and UniqueHealthyEgressIPCount use the product-level
+// "healthy-and-enabled" semantics, not the raw node-entry local health check.
 type RuntimeStatsProvider interface {
 	TotalNodes() int
 	HealthyNodes() int

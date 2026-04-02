@@ -12,6 +12,9 @@ import (
 )
 
 func nodeTagSortKey(n service.NodeSummary) string {
+	if n.DisplayTag != "" {
+		return n.DisplayTag
+	}
 	if len(n.Tags) == 0 {
 		return ""
 	}
@@ -74,13 +77,13 @@ func countUniqueEgressIPs(nodes []service.NodeSummary) int {
 	return len(seen)
 }
 
-func countUniqueHealthyEgressIPs(nodes []service.NodeSummary) int {
+func countUniqueHealthyAndEnabledEgressIPs(nodes []service.NodeSummary) int {
 	seen := make(map[string]struct{})
 	for _, n := range nodes {
 		if n.EgressIP == "" {
 			continue
 		}
-		if !n.IsHealthy() {
+		if !n.IsHealthyAndEnabled() {
 			continue
 		}
 		seen[n.EgressIP] = struct{}{}
@@ -128,6 +131,12 @@ func HandleListNodes(cp *service.ControlPlaneService) http.HandlerFunc {
 		}
 		filters.HasOutbound = hasOutbound
 
+		enabled, ok := parseBoolQueryOrWriteInvalid(w, r, "enabled")
+		if !ok {
+			return
+		}
+		filters.Enabled = enabled
+
 		if v := q.Get("probed_since"); v != "" {
 			t, err := time.Parse(time.RFC3339Nano, v)
 			if err != nil {
@@ -159,7 +168,7 @@ func HandleListNodes(cp *service.ControlPlaneService) http.HandlerFunc {
 			Limit:                  pg.Limit,
 			Offset:                 pg.Offset,
 			UniqueEgressIPs:        countUniqueEgressIPs(nodes),
-			UniqueHealthyEgressIPs: countUniqueHealthyEgressIPs(nodes),
+			UniqueHealthyEgressIPs: countUniqueHealthyAndEnabledEgressIPs(nodes),
 		})
 	}
 }

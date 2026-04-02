@@ -8,3 +8,5 @@ sing-box-reference
 AGENTS.md
 data/
 start.sh
+.devcontainer
+start-instance.sh

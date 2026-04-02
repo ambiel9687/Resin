@@ -347,6 +347,8 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	lifecycle := newRequestLifecycle(p.events, r, ProxyTypeReverse, false)
 	lifecycle.setTarget(parsed.Host, "")
+	upstreamTrace := newUpstreamRequestTrace()
+	var pendingEgressHeaderBytes int64
 	var egressBodyCounter *countingReadCloser
 	var ingressBodyCounter *countingReadCloser
 	var upgradedStreamCounter *countingReadWriteCloser
@@ -410,14 +412,18 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.URL = target
 			req.Host = parsed.Host
 			stripForwardingIdentityHeaders(req.Header)
-			lifecycle.addEgressBytes(headerWireLen(req.Header))
+			pendingEgressHeaderBytes = headerWireLen(req.Header)
+
+			// Compose request-progress trace first so egress commit logic can
+			// observe whether the upstream request was actually written.
+			reqCtx := httptrace.WithClientTrace(req.Context(), upstreamTrace.clientTrace())
 
 			// Add httptrace for TLS latency measurement on HTTPS.
 			if parsed.Protocol == "https" {
 				reporter := newReverseLatencyReporter(p.health, nodeHashRaw, domain)
-				reqCtx := httptrace.WithClientTrace(req.Context(), reporter.clientTrace())
-				*req = *req.WithContext(reqCtx)
+				reqCtx = httptrace.WithClientTrace(reqCtx, reporter.clientTrace())
 			}
+			*req = *req.WithContext(reqCtx)
 		},
 		Transport: transport,
 		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
@@ -486,8 +492,11 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy.ServeHTTP(w, r)
-	if egressBodyCounter != nil {
-		lifecycle.addEgressBytes(egressBodyCounter.Total())
+	if upstreamTrace.shouldCommitEgress() {
+		lifecycle.addEgressBytes(pendingEgressHeaderBytes)
+		if egressBodyCounter != nil {
+			lifecycle.addEgressBytes(egressBodyCounter.Total())
+		}
 	}
 	if ingressBodyCounter != nil {
 		lifecycle.addIngressBytes(ingressBodyCounter.Total())

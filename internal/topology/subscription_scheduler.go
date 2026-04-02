@@ -29,6 +29,9 @@ type SubscriptionScheduler struct {
 
 	// For persistence.
 	onSubUpdated func(sub *subscription.Subscription)
+	// onSubReenabledNode is called for each non-evicted node hash when a
+	// subscription transitions from disabled to enabled.
+	onSubReenabledNode func(hash node.Hash)
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -41,19 +44,22 @@ type SchedulerConfig struct {
 	Downloader   netutil.Downloader               // shared downloader
 	Fetcher      func(url string) ([]byte, error) // optional, defaults to Downloader.Download
 	OnSubUpdated func(sub *subscription.Subscription)
+	// OnSubReenabledNode is fired after false->true enabled transition.
+	OnSubReenabledNode func(hash node.Hash)
 }
 
 // NewSubscriptionScheduler creates a new scheduler.
 func NewSubscriptionScheduler(cfg SchedulerConfig) *SubscriptionScheduler {
 	downloadCtx, cancelDownload := context.WithCancel(context.Background())
 	sched := &SubscriptionScheduler{
-		subManager:     cfg.SubManager,
-		pool:           cfg.Pool,
-		downloader:     cfg.Downloader,
-		downloadCtx:    downloadCtx,
-		cancelDownload: cancelDownload,
-		onSubUpdated:   cfg.OnSubUpdated,
-		stopCh:         make(chan struct{}),
+		subManager:         cfg.SubManager,
+		pool:               cfg.Pool,
+		downloader:         cfg.Downloader,
+		downloadCtx:        downloadCtx,
+		cancelDownload:     cancelDownload,
+		onSubUpdated:       cfg.OnSubUpdated,
+		onSubReenabledNode: cfg.OnSubReenabledNode,
+		stopCh:             make(chan struct{}),
 	}
 	if cfg.Fetcher != nil {
 		sched.Fetcher = cfg.Fetcher
@@ -329,11 +335,44 @@ func (s *SubscriptionScheduler) handleUpdateFailure(
 // routable views. Disabling a subscription makes its nodes invisible to
 // platform tag-regex matching; enabling makes them visible again.
 func (s *SubscriptionScheduler) SetSubscriptionEnabled(sub *subscription.Subscription, enabled bool) {
+	wasEnabled := false
+	var candidateHashes []node.Hash
+	wasDisabled := make(map[node.Hash]struct{})
 	sub.WithOpLock(func() {
+		wasEnabled = sub.Enabled()
+
+		if !wasEnabled && enabled {
+			sub.ManagedNodes().RangeNodes(func(h node.Hash, managed subscription.ManagedNode) bool {
+				if managed.Evicted {
+					return true
+				}
+				candidateHashes = append(candidateHashes, h)
+				if s.pool != nil && s.pool.IsNodeDisabled(h) {
+					wasDisabled[h] = struct{}{}
+				}
+				return true
+			})
+		}
+
 		sub.SetEnabled(enabled)
 	})
 	// Rebuild all platform views so they pick up the visibility change.
 	s.pool.RebuildAllPlatforms()
+
+	// On re-enable, immediately re-check node outbound/probe state for nodes
+	// that actually transitioned from disabled -> enabled.
+	if !wasEnabled && enabled && s.onSubReenabledNode != nil {
+		for _, h := range candidateHashes {
+			if _, ok := wasDisabled[h]; !ok {
+				continue
+			}
+			if s.pool.IsNodeDisabled(h) {
+				continue
+			}
+			s.onSubReenabledNode(h)
+		}
+	}
+
 	if s.onSubUpdated != nil {
 		s.onSubUpdated(sub)
 	}

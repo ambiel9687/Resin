@@ -577,6 +577,8 @@ type PlatformSpecFilter struct {
 type NodeSummary struct {
 	NodeHash                         string    `json:"node_hash"`
 	CreatedAt                        string    `json:"created_at"`
+	Enabled                          bool      `json:"enabled"`
+	DisplayTag                       string    `json:"display_tag,omitempty"`
 	HasOutbound                      bool      `json:"has_outbound"`
 	LastError                        string    `json:"last_error,omitempty"`
 	CircuitOpenSince                 *string   `json:"circuit_open_since"`
@@ -591,9 +593,10 @@ type NodeSummary struct {
 	Tags                             []NodeTag `json:"tags"`
 }
 
-// IsHealthy follows the unified health rule used across the backend.
-func (n NodeSummary) IsHealthy() bool {
-	return n.HasOutbound && n.CircuitOpenSince == nil
+// IsHealthyAndEnabled follows the node-summary health rule used by API/UI
+// aggregates: enabled, outbound-ready, and not circuit-open.
+func (n NodeSummary) IsHealthyAndEnabled() bool {
+	return n.Enabled && n.HasOutbound && n.CircuitOpenSince == nil
 }
 
 type NodeTag struct {
@@ -607,9 +610,15 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 	ns := NodeSummary{
 		NodeHash:     h.Hex(),
 		CreatedAt:    entry.CreatedAt.UTC().Format(time.RFC3339Nano),
+		Enabled:      true,
 		HasOutbound:  entry.HasOutbound(),
 		LastError:    entry.GetLastError(),
 		FailureCount: int(entry.FailureCount.Load()),
+	}
+
+	if s != nil && s.Pool != nil {
+		ns.Enabled = !s.Pool.IsNodeDisabled(h)
+		ns.DisplayTag = s.Pool.ResolveNodeDisplayTag(h)
 	}
 
 	if cos := entry.CircuitOpenSince.Load(); cos > 0 {
@@ -708,28 +717,17 @@ func (s *ControlPlaneService) PreviewFilter(req PreviewFilterRequest) ([]NodeSum
 	if s.Pool != nil {
 		subLookup = s.Pool.MakeSubLookup()
 	}
-	var regionFilterSet map[string]struct{}
-	if len(regionFilters) > 0 {
-		regionFilterSet = make(map[string]struct{}, len(regionFilters))
-		for _, rf := range regionFilters {
-			regionFilterSet[rf] = struct{}{}
-		}
-	}
-
 	var result []NodeSummary
 	s.Pool.Range(func(h node.Hash, entry *node.NodeEntry) bool {
 		if !entry.MatchRegexs(regexFilters, subLookup) {
 			return true
 		}
-		if len(regionFilterSet) > 0 {
+		if len(regionFilters) > 0 {
 			region := entry.GetRegion(nil)
 			if s.GeoIP != nil {
 				region = entry.GetRegion(s.GeoIP.Lookup)
 			}
-			if region == "" {
-				return true
-			}
-			if _, ok := regionFilterSet[region]; !ok {
+			if !platform.MatchRegionFilter(region, regionFilters) {
 				return true
 			}
 		}

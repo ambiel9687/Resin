@@ -252,3 +252,33 @@ func TestHandleProbeEgress_ReturnsRegion(t *testing.T) {
 		t.Fatalf("region: got %v, want %q", body["region"], "jp")
 	}
 }
+
+func TestHandleListNodes_EnabledFilter(t *testing.T) {
+	srv, cp, _ := newControlPlaneTestServer(t)
+
+	subEnabled := subscription.NewSubscription("11111111-1111-1111-1111-111111111111", "sub-enabled", "https://example.com/a", true, false)
+	subDisabled := subscription.NewSubscription("22222222-2222-2222-2222-222222222222", "sub-disabled", "https://example.com/b", false, false)
+	cp.SubMgr.Register(subEnabled)
+	cp.SubMgr.Register(subDisabled)
+
+	addNodeForNodeListTestWithTag(t, cp, subEnabled, `{"type":"ss","server":"1.1.1.1","port":443}`, "", "enabled-tag")
+	addNodeForNodeListTestWithTag(t, cp, subDisabled, `{"type":"ss","server":"2.2.2.2","port":443}`, "", "disabled-tag")
+
+	rec := doJSONRequest(t, srv, http.MethodGet, "/api/v1/nodes?enabled=true", nil, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enabled=true status: got %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	if body["total"] != float64(1) {
+		t.Fatalf("enabled=true total: got %v, want 1", body["total"])
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodGet, "/api/v1/nodes?enabled=false", nil, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enabled=false status: got %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body = decodeJSONMap(t, rec)
+	if body["total"] != float64(1) {
+		t.Fatalf("enabled=false total: got %v, want 1", body["total"])
+	}
+}

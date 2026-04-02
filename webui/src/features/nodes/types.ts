@@ -7,6 +7,8 @@ export type NodeTag = {
 export type NodeSummary = {
   node_hash: string;
   created_at: string;
+  enabled: boolean;
+  display_tag?: string;
   has_outbound: boolean;
   last_error?: string;
   circuit_open_since?: string;
@@ -40,6 +42,7 @@ export type NodeListFilters = {
   region?: string;
   egress_ip?: string;
   probed_since?: string;
+  enabled?: boolean;
   circuit_open?: boolean;
   has_outbound?: boolean;
 };

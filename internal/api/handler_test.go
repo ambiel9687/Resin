@@ -226,9 +226,6 @@ func TestSystemConfig_OK(t *testing.T) {
 	}
 
 	// Check some default values
-	if body["user_agent"] != "sing-box" {
-		t.Errorf("user_agent: got %q, want %q", body["user_agent"], "sing-box")
-	}
 	if body["request_log_enabled"] != true {
 		t.Errorf("request_log_enabled: got %v, want true", body["request_log_enabled"])
 	}
@@ -375,9 +372,6 @@ func TestSystemDefaultConfig_OK(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if body["user_agent"] != "sing-box" {
-		t.Errorf("user_agent: got %q, want %q", body["user_agent"], "sing-box")
-	}
 	if body["request_log_enabled"] != true {
 		t.Errorf("request_log_enabled: got %v, want true", body["request_log_enabled"])
 	}

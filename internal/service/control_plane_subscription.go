@@ -42,15 +42,19 @@ type SubscriptionResponse struct {
 func (s *ControlPlaneService) subToResponse(sub *subscription.Subscription) SubscriptionResponse {
 	nodeCount := 0
 	healthyNodeCount := 0
+	var isHealthyAndEnabled func(*node.NodeEntry) bool
+	if sub.Enabled() && s != nil && s.Pool != nil {
+		isHealthyAndEnabled = s.Pool.MakeHealthyAndEnabledEvaluator()
+	}
 	if managed := sub.ManagedNodes(); managed != nil {
 		managed.RangeNodes(func(h node.Hash, n subscription.ManagedNode) bool {
 			if n.Evicted {
 				return true
 			}
 			nodeCount++
-			if s != nil && s.Pool != nil {
+			if isHealthyAndEnabled != nil {
 				entry, ok := s.Pool.GetEntry(h)
-				if ok && entry.IsHealthy() {
+				if ok && isHealthyAndEnabled(entry) {
 					healthyNodeCount++
 				}
 			}

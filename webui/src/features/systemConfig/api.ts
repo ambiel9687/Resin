@@ -5,7 +5,6 @@ import type { EnvConfig, RuntimeConfig, RuntimeConfigPatch } from "./types";
 const path = "/api/v1/system/config";
 
 const DEFAULT_CONFIG: RuntimeConfig = {
-  user_agent: "",
   request_log_enabled: true,
   reverse_proxy_log_detail_enabled: false,
   reverse_proxy_log_req_headers_max_bytes: 0,
@@ -45,7 +44,6 @@ function normalizeRuntimeConfig(raw: Partial<RuntimeConfig> | null | undefined):
   }
 
   return {
-    user_agent: asString(raw.user_agent, DEFAULT_CONFIG.user_agent),
     request_log_enabled: Boolean(raw.request_log_enabled),
     reverse_proxy_log_detail_enabled: Boolean(raw.reverse_proxy_log_detail_enabled),
     reverse_proxy_log_req_headers_max_bytes: asNumber(

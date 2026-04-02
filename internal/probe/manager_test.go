@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/node"
+	"github.com/Resinat/Resin/internal/subscription"
 	"github.com/Resinat/Resin/internal/testutil"
 	"github.com/Resinat/Resin/internal/topology"
 )
@@ -357,6 +358,8 @@ func TestTriggerImmediateEgressProbe_WithFetcher(t *testing.T) {
 			return []byte("ip=198.51.100.1"), 10 * time.Millisecond, nil
 		},
 	})
+	mgr.Start()
+	defer mgr.Stop()
 
 	mgr.TriggerImmediateEgressProbe(hash)
 	called.Wait()
@@ -367,6 +370,170 @@ func TestTriggerImmediateEgressProbe_WithFetcher(t *testing.T) {
 	got := entry.GetEgressIP()
 	if got != netip.MustParseAddr("198.51.100.1") {
 		t.Fatalf("egress IP: got %v, want 198.51.100.1", got)
+	}
+}
+
+func TestTriggerImmediateLatencyProbe_WithFetcher(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	sub := subscription.NewSubscription("sub1", "sub1", "url", true, false)
+	subMgr.Register(sub)
+
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hash := node.HashFromRawOptions([]byte(`{"type":"trigger-latency"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"trigger-latency"}`), "sub1")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var called sync.WaitGroup
+	called.Add(1)
+	mgr := NewProbeManager(ProbeConfig{
+		Pool:        pool,
+		Concurrency: 1,
+		Fetcher: func(_ node.Hash, _ string) ([]byte, time.Duration, error) {
+			defer called.Done()
+			return []byte("ok"), 25 * time.Millisecond, nil
+		},
+	})
+	mgr.Start()
+	defer mgr.Stop()
+
+	mgr.TriggerImmediateLatencyProbe(hash)
+	called.Wait()
+	time.Sleep(20 * time.Millisecond)
+
+	if !entry.HasLatency() {
+		t.Fatal("expected latency data after immediate latency probe")
+	}
+}
+
+func TestScanEgress_SkipsDisabledNodes(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	sub := subscription.NewSubscription("sub1", "sub1", "url", false, false)
+	subMgr.Register(sub)
+
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hash := node.HashFromRawOptions([]byte(`{"type":"scan-egress-disabled"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"scan-egress-disabled"}`), "sub1")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var calls atomic.Int32
+	mgr := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(_ node.Hash, _ string) ([]byte, time.Duration, error) {
+			calls.Add(1)
+			return []byte("ip=198.51.100.1"), 10 * time.Millisecond, nil
+		},
+	})
+
+	mgr.scanEgress()
+	time.Sleep(30 * time.Millisecond)
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("disabled node should be skipped by scanEgress, calls=%d", got)
+	}
+}
+
+func TestScanLatency_SkipsDisabledNodes(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	sub := subscription.NewSubscription("sub1", "sub1", "url", false, false)
+	subMgr.Register(sub)
+
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hash := node.HashFromRawOptions([]byte(`{"type":"scan-latency-disabled"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"scan-latency-disabled"}`), "sub1")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var calls atomic.Int32
+	mgr := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(_ node.Hash, _ string) ([]byte, time.Duration, error) {
+			calls.Add(1)
+			return []byte("ok"), 15 * time.Millisecond, nil
+		},
+	})
+
+	mgr.scanLatency()
+	time.Sleep(30 * time.Millisecond)
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("disabled node should be skipped by scanLatency, calls=%d", got)
+	}
+}
+
+func TestQueuedAsyncProbe_SkipsNodeDisabledBeforeExecution(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	sub := subscription.NewSubscription("sub1", "sub1", "url", true, false)
+	subMgr.Register(sub)
+
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hash := node.HashFromRawOptions([]byte(`{"type":"queued-disabled-before-execution"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"queued-disabled-before-execution"}`), "sub1")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var calls atomic.Int32
+	mgr := NewProbeManager(ProbeConfig{
+		Pool:        pool,
+		Concurrency: 1,
+		Fetcher: func(_ node.Hash, _ string) ([]byte, time.Duration, error) {
+			calls.Add(1)
+			return []byte("ip=198.51.100.1"), 10 * time.Millisecond, nil
+		},
+	})
+	defer mgr.Stop()
+
+	if ok := mgr.enqueueProbe(hash, probeTaskKindEgress, probePriorityNormal); !ok {
+		t.Fatal("enqueue should succeed")
+	}
+
+	sub.SetEnabled(false)
+	mgr.Start()
+	time.Sleep(50 * time.Millisecond)
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("expected disabled queued node to be skipped, calls=%d", got)
 	}
 }
 
@@ -399,9 +566,14 @@ func TestProbeManager_StopWaitsImmediateProbe(t *testing.T) {
 			return []byte("ip=203.0.113.1"), 10 * time.Millisecond, nil
 		},
 	})
+	mgr.Start()
 
 	mgr.TriggerImmediateEgressProbe(hash)
-	<-started
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("immediate probe did not start")
+	}
 
 	stopDone := make(chan struct{})
 	go func() {
@@ -425,6 +597,224 @@ func TestProbeManager_StopWaitsImmediateProbe(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("expected exactly 1 probe call, got %d", got)
 	}
+}
+
+func TestProbeQueue_DequeueChoosesNormalWhenSelectorRequests(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hashHigh := node.HashFromRawOptions([]byte(`{"type":"queue-high"}`))
+	hashNormal := node.HashFromRawOptions([]byte(`{"type":"queue-normal"}`))
+	pool.AddNodeFromSub(hashHigh, []byte(`{"type":"queue-high"}`), "sub1")
+	pool.AddNodeFromSub(hashNormal, []byte(`{"type":"queue-normal"}`), "sub1")
+
+	entryHigh, ok := pool.GetEntry(hashHigh)
+	if !ok {
+		t.Fatal("high entry not found")
+	}
+	storeOutbound(entryHigh)
+	entryNormal, ok := pool.GetEntry(hashNormal)
+	if !ok {
+		t.Fatal("normal entry not found")
+	}
+	storeOutbound(entryNormal)
+
+	order := make(chan node.Hash, 2)
+	mgr := NewProbeManager(ProbeConfig{
+		Pool:        pool,
+		Concurrency: 1,
+		ChooseNormalWhenBoth: func() bool {
+			return true
+		},
+		Fetcher: func(hash node.Hash, _ string) ([]byte, time.Duration, error) {
+			order <- hash
+			return []byte("ip=198.51.100.20"), 10 * time.Millisecond, nil
+		},
+	})
+	defer mgr.Stop()
+
+	if ok := mgr.enqueueProbe(hashHigh, probeTaskKindEgress, probePriorityHigh); !ok {
+		t.Fatal("enqueue high should succeed")
+	}
+	if ok := mgr.enqueueProbe(hashNormal, probeTaskKindEgress, probePriorityNormal); !ok {
+		t.Fatal("enqueue normal should succeed")
+	}
+
+	mgr.Start()
+
+	select {
+	case got := <-order:
+		if got != hashNormal {
+			t.Fatalf("first dequeued hash = %s, want normal %s", got.Hex(), hashNormal.Hex())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first dequeued task")
+	}
+}
+
+func TestProbeQueue_HighUpgradeOfQueuedNormalRunsFirstWithoutExtraRun(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hashOther := node.HashFromRawOptions([]byte(`{"type":"queue-upgrade-other"}`))
+	hashTarget := node.HashFromRawOptions([]byte(`{"type":"queue-upgrade-target"}`))
+	pool.AddNodeFromSub(hashOther, []byte(`{"type":"queue-upgrade-other"}`), "sub1")
+	pool.AddNodeFromSub(hashTarget, []byte(`{"type":"queue-upgrade-target"}`), "sub1")
+
+	entryOther, ok := pool.GetEntry(hashOther)
+	if !ok {
+		t.Fatal("other entry not found")
+	}
+	storeOutbound(entryOther)
+	entryTarget, ok := pool.GetEntry(hashTarget)
+	if !ok {
+		t.Fatal("target entry not found")
+	}
+	storeOutbound(entryTarget)
+
+	order := make(chan node.Hash, 3)
+	mgr := NewProbeManager(ProbeConfig{
+		Pool:        pool,
+		Concurrency: 1,
+		ChooseNormalWhenBoth: func() bool {
+			return false
+		},
+		Fetcher: func(hash node.Hash, _ string) ([]byte, time.Duration, error) {
+			order <- hash
+			return []byte("ip=198.51.100.21"), 10 * time.Millisecond, nil
+		},
+	})
+	defer mgr.Stop()
+
+	if ok := mgr.enqueueProbe(hashOther, probeTaskKindEgress, probePriorityNormal); !ok {
+		t.Fatal("enqueue other normal should succeed")
+	}
+	if ok := mgr.enqueueProbe(hashTarget, probeTaskKindEgress, probePriorityNormal); !ok {
+		t.Fatal("enqueue target normal should succeed")
+	}
+	if ok := mgr.enqueueProbe(hashTarget, probeTaskKindEgress, probePriorityHigh); !ok {
+		t.Fatal("enqueue target high upgrade should add a high-priority token")
+	}
+
+	mgr.Start()
+
+	select {
+	case got := <-order:
+		if got != hashTarget {
+			t.Fatalf("first executed hash = %s, want upgraded target %s", got.Hex(), hashTarget.Hex())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for upgraded task")
+	}
+
+	select {
+	case got := <-order:
+		if got != hashOther {
+			t.Fatalf("second executed hash = %s, want other %s", got.Hex(), hashOther.Hex())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second executed task")
+	}
+
+	select {
+	case got := <-order:
+		t.Fatalf("unexpected extra probe execution for %s", got.Hex())
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestProbeQueue_FullDropsWithoutBlocking(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hash1 := node.HashFromRawOptions([]byte(`{"type":"queue-full-1"}`))
+	hash2 := node.HashFromRawOptions([]byte(`{"type":"queue-full-2"}`))
+	pool.AddNodeFromSub(hash1, []byte(`{"type":"queue-full-1"}`), "sub1")
+	pool.AddNodeFromSub(hash2, []byte(`{"type":"queue-full-2"}`), "sub1")
+
+	mgr := NewProbeManager(ProbeConfig{
+		Pool:          pool,
+		Concurrency:   1,
+		QueueCapacity: 1,
+	})
+
+	if ok := mgr.enqueueProbe(hash1, probeTaskKindEgress, probePriorityNormal); !ok {
+		t.Fatal("first enqueue should succeed")
+	}
+	if ok := mgr.enqueueProbe(hash2, probeTaskKindEgress, probePriorityNormal); ok {
+		t.Fatal("second enqueue should be dropped when queue is full")
+	}
+}
+
+func TestProbeSync_BypassesAsyncWorkerLimit(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hashAsync := node.HashFromRawOptions([]byte(`{"type":"sync-bypass-async"}`))
+	hashSync := node.HashFromRawOptions([]byte(`{"type":"sync-bypass-sync"}`))
+	pool.AddNodeFromSub(hashAsync, []byte(`{"type":"sync-bypass-async"}`), "sub1")
+	pool.AddNodeFromSub(hashSync, []byte(`{"type":"sync-bypass-sync"}`), "sub1")
+
+	entryAsync, ok := pool.GetEntry(hashAsync)
+	if !ok {
+		t.Fatal("async entry not found")
+	}
+	storeOutbound(entryAsync)
+	entrySync, ok := pool.GetEntry(hashSync)
+	if !ok {
+		t.Fatal("sync entry not found")
+	}
+	storeOutbound(entrySync)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	mgr := NewProbeManager(ProbeConfig{
+		Pool:        pool,
+		Concurrency: 1,
+		Fetcher: func(hash node.Hash, _ string) ([]byte, time.Duration, error) {
+			if hash == hashAsync {
+				startedOnce.Do(func() { close(started) })
+				<-release
+				return []byte("ip=198.51.100.31"), 20 * time.Millisecond, nil
+			}
+			return []byte("ip=198.51.100.32"), 5 * time.Millisecond, nil
+		},
+	})
+	mgr.Start()
+	defer mgr.Stop()
+
+	mgr.TriggerImmediateEgressProbe(hashAsync)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("async worker did not start")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := mgr.ProbeEgressSync(hashSync)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ProbeEgressSync error: %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("ProbeEgressSync blocked by async worker limit")
+	}
+
+	close(release)
 }
 
 func TestProbeLatencySync_ReturnsEWMAFromNormalizedDomain(t *testing.T) {

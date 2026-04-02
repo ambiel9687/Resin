@@ -439,6 +439,7 @@ func TestCreatePlatform_BuildsRoutableViewBeforePublish(t *testing.T) {
 	// Seed one fully-routable node into the pool before platform creation.
 	raw := []byte(`{"type":"ss","server":"1.1.1.1","port":443}`)
 	hash := node.HashFromRawOptions(raw)
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"seed"}})
 	entry := node.NewNodeEntry(hash, raw, time.Now(), 16)
 	entry.AddSubscriptionID(sub.ID)
 	entry.SetEgressIP(netip.MustParseAddr("1.2.3.4"))
@@ -671,6 +672,48 @@ func TestGetSubscription_NodeCountExcludesEvictedManagedNodes(t *testing.T) {
 	}
 	if resp.HealthyNodeCount != 1 {
 		t.Fatalf("healthy_node_count = %d, want 1", resp.HealthyNodeCount)
+	}
+}
+
+func TestGetSubscription_HealthyNodeCount_ExcludesDisabledSubscriptionNodes(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		GeoLookup:              func(netip.Addr) string { return "" },
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	sub := subscription.NewSubscription("sub-disabled", "sub-disabled", "https://example.com/sub", false, false)
+	subMgr.Register(sub)
+
+	raw := []byte(`{"type":"ss","server":"1.1.1.1","port":443}`)
+	hash := node.HashFromRawOptions(raw)
+	pool.AddNodeFromSub(hash, raw, sub.ID)
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag-a"}})
+
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry missing")
+	}
+	outbound := testutil.NewNoopOutbound()
+	entry.Outbound.Store(&outbound)
+	pool.RecordResult(hash, true)
+
+	cp := &ControlPlaneService{
+		Pool:   pool,
+		SubMgr: subMgr,
+	}
+
+	resp, err := cp.GetSubscription(sub.ID)
+	if err != nil {
+		t.Fatalf("GetSubscription: %v", err)
+	}
+	if resp.NodeCount != 1 {
+		t.Fatalf("node_count = %d, want 1", resp.NodeCount)
+	}
+	if resp.HealthyNodeCount != 0 {
+		t.Fatalf("healthy_node_count = %d, want 0", resp.HealthyNodeCount)
 	}
 }
 

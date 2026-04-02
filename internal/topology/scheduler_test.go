@@ -1166,3 +1166,87 @@ func TestScheduler_SetSubscriptionEnabled_RebuildsPlatformViews_EmptyRegex(t *te
 		t.Fatalf("expected node in view after re-enable with empty regex, got %d", plat.View().Size())
 	}
 }
+
+func TestScheduler_SetSubscriptionEnabled_ReenabledCallbackForActiveNodesOnly(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	sub := subscription.NewSubscription("s1", "Provider", "http://example.com", false, false)
+	subMgr.Register(sub)
+
+	pool := newTestPool(subMgr)
+
+	rawLive := json.RawMessage(`{"type":"shadowsocks","server":"1.1.1.1","server_port":443}`)
+	hLive := node.HashFromRawOptions(rawLive)
+	rawStale := json.RawMessage(`{"type":"shadowsocks","server":"2.2.2.2","server_port":443}`)
+	hStale := node.HashFromRawOptions(rawStale)
+
+	mn := subscription.NewManagedNodes()
+	mn.StoreNode(hLive, subscription.ManagedNode{Tags: []string{"live"}})
+	mn.StoreNode(hStale, subscription.ManagedNode{Tags: []string{"stale"}}) // not in pool
+	sub.SwapManagedNodes(mn)
+
+	pool.AddNodeFromSub(hLive, rawLive, sub.ID)
+
+	var got []node.Hash
+	sched := NewSubscriptionScheduler(SchedulerConfig{
+		SubManager: subMgr,
+		Pool:       pool,
+		OnSubReenabledNode: func(h node.Hash) {
+			got = append(got, h)
+		},
+	})
+
+	sched.SetSubscriptionEnabled(sub, true)
+
+	if len(got) != 1 {
+		t.Fatalf("reenabled callback count = %d, want 1", len(got))
+	}
+	if got[0] != hLive {
+		t.Fatalf("reenabled callback hash = %s, want %s", got[0].Hex(), hLive.Hex())
+	}
+}
+
+func TestScheduler_SetSubscriptionEnabled_ReenabledCallbackSkipsAlreadyEnabledSharedNodes(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	subA := subscription.NewSubscription("s-a", "Provider-A", "http://example.com/a", false, false)
+	subB := subscription.NewSubscription("s-b", "Provider-B", "http://example.com/b", true, false)
+	subMgr.Register(subA)
+	subMgr.Register(subB)
+
+	pool := newTestPool(subMgr)
+
+	rawShared := json.RawMessage(`{"type":"shadowsocks","server":"1.1.1.1","server_port":443}`)
+	hShared := node.HashFromRawOptions(rawShared)
+	rawRecovered := json.RawMessage(`{"type":"shadowsocks","server":"2.2.2.2","server_port":443}`)
+	hRecovered := node.HashFromRawOptions(rawRecovered)
+
+	managedA := subscription.NewManagedNodes()
+	managedA.StoreNode(hShared, subscription.ManagedNode{Tags: []string{"shared"}})
+	managedA.StoreNode(hRecovered, subscription.ManagedNode{Tags: []string{"recovered"}})
+	subA.SwapManagedNodes(managedA)
+
+	managedB := subscription.NewManagedNodes()
+	managedB.StoreNode(hShared, subscription.ManagedNode{Tags: []string{"shared-b"}})
+	subB.SwapManagedNodes(managedB)
+
+	pool.AddNodeFromSub(hShared, rawShared, subA.ID)
+	pool.AddNodeFromSub(hShared, rawShared, subB.ID)
+	pool.AddNodeFromSub(hRecovered, rawRecovered, subA.ID)
+
+	var got []node.Hash
+	sched := NewSubscriptionScheduler(SchedulerConfig{
+		SubManager: subMgr,
+		Pool:       pool,
+		OnSubReenabledNode: func(h node.Hash) {
+			got = append(got, h)
+		},
+	})
+
+	sched.SetSubscriptionEnabled(subA, true)
+
+	if len(got) != 1 {
+		t.Fatalf("reenabled callback count = %d, want 1", len(got))
+	}
+	if got[0] != hRecovered {
+		t.Fatalf("reenabled callback hash = %s, want %s", got[0].Hex(), hRecovered.Hex())
+	}
+}

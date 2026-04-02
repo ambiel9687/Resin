@@ -386,9 +386,10 @@ Resin 使用计数器熔断机制保护系统稳定性。
     * 失败：调用 `RecordResult(false)` 与 `RecordLatency(..., nil)`。连续失败将导致节点熔断。
 
 #### 主动探测的并发控制
-ProbeManager 采用 **SPSC (Single Producer Single Consumer)** 变体模型进行调度：
-* **执行**：所有主动探测任务共享一个全局信号量（默认 1000 并发），异步执行。
-* **背压**：受限于信号量，当并发满载时，调度协程会阻塞等待，天然形成了背压，防止创建过多 goroutine。
+ProbeManager 采用 **双优先级队列 + 固定 worker 池** 的调度模型：
+* **执行**：定期扫描器只负责把待探测节点入队；固定数量 worker 异步消费并执行探测。
+* **优先级**：支持高/普通双队列。高队列非空时仍有 10% 概率抽取普通队列，避免普通任务长期饥饿。
+* **限流**：异步并发由 worker 数量决定；同步探测接口（需要立即返回结果）不走异步队列限流路径。
 
 ### 被动延迟探测
 
@@ -1017,7 +1018,6 @@ Resin 需要做实事与历史的统计数据，用于 Dashboard 展示。
 
 ```json
 {
-  "user_agent": "sing-box",
   "request_log_enabled": true,
   "reverse_proxy_log_detail_enabled": false,
   "reverse_proxy_log_req_headers_max_bytes": 4096,
@@ -1045,7 +1045,6 @@ Resin 需要做实事与历史的统计数据，用于 Dashboard 展示。
 
 ```json
 {
-  "user_agent": "sing-box",
   "request_log_enabled": true,
   "reverse_proxy_log_detail_enabled": false,
   "reverse_proxy_log_req_headers_max_bytes": 4096,
@@ -2244,7 +2243,7 @@ GeoIP 与订阅的下载都有错误重试的需求。
 
 核心设置：
 * `RESIN_MAX_LATENCY_TABLE_ENTRIES`：每个节点延迟表中“普通站点 LRU 区”的最大表项数。默认 12，最大 32（超限启动失败）。
-* `RESIN_PROBE_CONCURRENCY`：节点探测的最大并发数量，默认 1000。
+* `RESIN_PROBE_CONCURRENCY`：节点探测的最大并发数量。默认 1000，最大 10000（超限启动失败）。
 * `RESIN_GEOIP_UPDATE_SCHEDULE`：GeoIP 数据库自动更新的 Cron 表达式。默认 "0 7 * * *"。
 * `RESIN_DEFAULT_PLATFORM_STICKY_TTL`：默认平台粘性会话时长。默认 "168h"。
 * `RESIN_DEFAULT_PLATFORM_REGEX_FILTERS`：默认平台正则过滤器（JSON 字符串数组）。默认 `[]`。
@@ -2284,12 +2283,25 @@ GeoIP 与订阅的下载都有错误重试的需求。
 * `RESIN_METRIC_LATENCY_BIN_WIDTH_MS`：延迟统计桶大小，默认 100ms。
 * `RESIN_METRIC_LATENCY_BIN_OVERFLOW_MS`：延迟统计溢出值，默认 3000ms。
 
+### 节点默认 DNS 解析链
+Resin 托管节点的默认域名解析使用固定安全 DNS 链，不通过环境变量配置：
+1. `https://doh.pub/dns-query`
+2. `https://dns.alidns.com/dns-query`
+3. `tls://223.5.5.5`
+4. `local`
+
+说明：
+* 正常情况下，优先使用前 3 个安全 DNS 上游。
+* 当前 3 个安全 DNS 上游全部失败时，降级回退到 `local`，保证节点仍可解析和连通。
+* `doh.pub` 与 `dns.alidns.com` 这两个 DoH 域名自身的 bootstrap 解析继续使用 `local`。
+* 此默认 DNS 链仅作用于 Resin 内部 sing-box builder 上下文中的默认域名解析；订阅下载、GeoIP 下载等其他下载路径仍保持原有行为。
+
 ### 运行时全局设置项（支持热更新）
 Resin 支持通过 API (`PATCH /system/config`) 动态调整大部分全局运行参数。配置文件存储于数据库。
 以下所有配置项支持热更新。
 
 #### 基础设置
-* `UserAgent`: Resin 发起资源下载（订阅/GeoIP）HTTP 请求时使用的 User-Agent 头。默认 "sing-box"。
+资源下载（订阅/GeoIP）HTTP 请求固定使用中性 User-Agent：`Go-http-client/1.1`。
 
 #### 请求日志设置
 * `RequestLogEnabled`: 是否开启请求日志记录。此开关实时生效。默认 True。

@@ -196,7 +196,7 @@ func TestStateRepo_SystemConfig_RoundTrip(t *testing.T) {
 
 	// Save.
 	c := config.NewDefaultRuntimeConfig()
-	c.UserAgent = "test-agent"
+	c.MaxConsecutiveFailures = 7
 	now := time.Now().UnixNano()
 	if err := repo.SaveSystemConfig(c, 1, now); err != nil {
 		t.Fatal(err)
@@ -210,12 +210,12 @@ func TestStateRepo_SystemConfig_RoundTrip(t *testing.T) {
 	if ver != 1 {
 		t.Fatalf("expected version 1, got %d", ver)
 	}
-	if cfg.UserAgent != "test-agent" {
-		t.Fatalf("expected user_agent test-agent, got %s", cfg.UserAgent)
+	if cfg.MaxConsecutiveFailures != 7 {
+		t.Fatalf("expected max_consecutive_failures 7, got %d", cfg.MaxConsecutiveFailures)
 	}
 
 	// Upsert (idempotent, bump version).
-	c.UserAgent = "updated-agent"
+	c.MaxConsecutiveFailures = 11
 	if err := repo.SaveSystemConfig(c, 2, now+1); err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +223,8 @@ func TestStateRepo_SystemConfig_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ver != 2 || cfg.UserAgent != "updated-agent" {
-		t.Fatalf("expected version 2 + updated-agent, got %d + %s", ver, cfg.UserAgent)
+	if ver != 2 || cfg.MaxConsecutiveFailures != 11 {
+		t.Fatalf("expected version 2 + max_consecutive_failures 11, got %d + %d", ver, cfg.MaxConsecutiveFailures)
 	}
 }
 

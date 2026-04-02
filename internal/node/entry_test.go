@@ -168,6 +168,52 @@ func TestNodeEntry_MatchRegexs_MultiSub(t *testing.T) {
 	}
 }
 
+func TestNodeEntry_HasEnabledSubscription(t *testing.T) {
+	h := HashFromRawOptions([]byte(`{"type":"ss"}`))
+	e := NewNodeEntry(h, nil, time.Now(), 0)
+	e.AddSubscriptionID("sub-disabled")
+	e.AddSubscriptionID("sub-enabled")
+
+	lookup := func(subID string, hash Hash) (string, bool, []string, bool) {
+		switch subID {
+		case "sub-disabled":
+			return "SubDisabled", false, []string{"node-a"}, true
+		case "sub-enabled":
+			return "SubEnabled", true, []string{"node-b"}, true
+		default:
+			return "", false, nil, false
+		}
+	}
+
+	if !e.HasEnabledSubscription(lookup) {
+		t.Fatal("expected HasEnabledSubscription to be true")
+	}
+	if e.IsDisabledBySubscriptions(lookup) {
+		t.Fatal("expected IsDisabledBySubscriptions to be false")
+	}
+}
+
+func TestNodeEntry_IsDisabledBySubscriptions_AllDisabledOrMissing(t *testing.T) {
+	h := HashFromRawOptions([]byte(`{"type":"ss"}`))
+	e := NewNodeEntry(h, nil, time.Now(), 0)
+	e.AddSubscriptionID("sub-disabled")
+	e.AddSubscriptionID("sub-missing")
+
+	lookup := func(subID string, hash Hash) (string, bool, []string, bool) {
+		if subID == "sub-disabled" {
+			return "SubDisabled", false, []string{"node-a"}, true
+		}
+		return "", false, nil, false
+	}
+
+	if e.HasEnabledSubscription(lookup) {
+		t.Fatal("expected HasEnabledSubscription to be false")
+	}
+	if !e.IsDisabledBySubscriptions(lookup) {
+		t.Fatal("expected IsDisabledBySubscriptions to be true")
+	}
+}
+
 func TestNodeEntry_CircuitBreaker(t *testing.T) {
 	e := NewNodeEntry(Hash{}, nil, time.Now(), 0)
 	if e.IsCircuitOpen() {

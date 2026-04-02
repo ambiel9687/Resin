@@ -1,9 +1,9 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Info, Link2, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Info, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
@@ -277,10 +277,6 @@ export function PlatformDetailPage() {
                   <strong>{t(emptyAccountBehaviorLabel[platform.reverse_proxy_empty_account_behavior])}</strong>
                 </span>
               </div>
-              <Link to={`/nodes?platform_id=${encodeURIComponent(platform.id)}`} className="platform-detail-node-link">
-                <Link2 size={14} />
-                <span>{t("可路由节点")}</span>
-              </Link>
             </div>
           </Card>
 
@@ -455,9 +451,12 @@ export function PlatformDetailPage() {
                     <Textarea
                       id="detail-edit-region"
                       rows={6}
-                      placeholder={t("每行一条，如 hk / us")}
+                      placeholder={t("每行一条，如 hk / us / !hk")}
                       {...editForm.register("region_filters_text")}
                     />
+                    <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      {t("支持反选：以 ! 开头可排除地区（如 !hk）。可与正选混用，最终结果为“先正选再排除”。")}
+                    </p>
                   </div>
 
                   <div className="platform-config-actions">

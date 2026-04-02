@@ -39,7 +39,7 @@ func TestEngine_StrongPersist_ConfigSurvivesRestart(t *testing.T) {
 	}
 
 	cfg := config.NewDefaultRuntimeConfig()
-	cfg.UserAgent = "persist-test"
+	cfg.MaxConsecutiveFailures = 9
 	if err := engine1.SaveSystemConfig(cfg, 1, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
@@ -56,8 +56,8 @@ func TestEngine_StrongPersist_ConfigSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ver != 1 || loaded.UserAgent != "persist-test" {
-		t.Fatalf("config did not survive restart: ver=%d, ua=%s", ver, loaded.UserAgent)
+	if ver != 1 || loaded.MaxConsecutiveFailures != 9 {
+		t.Fatalf("config did not survive restart: ver=%d, max_failures=%d", ver, loaded.MaxConsecutiveFailures)
 	}
 }
 

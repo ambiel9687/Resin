@@ -9,9 +9,6 @@ import (
 func TestNewDefaultRuntimeConfig(t *testing.T) {
 	cfg := NewDefaultRuntimeConfig()
 
-	if cfg.UserAgent != "sing-box" {
-		t.Errorf("UserAgent: got %q, want %q", cfg.UserAgent, "sing-box")
-	}
 	if cfg.RequestLogEnabled != true {
 		t.Errorf("RequestLogEnabled: got %v, want true", cfg.RequestLogEnabled)
 	}
@@ -40,9 +37,6 @@ func TestRuntimeConfig_JSONRoundTrip(t *testing.T) {
 	}
 
 	// Spot-check key fields after round-trip
-	if decoded.UserAgent != original.UserAgent {
-		t.Errorf("UserAgent: got %q, want %q", decoded.UserAgent, original.UserAgent)
-	}
 	if decoded.MaxConsecutiveFailures != original.MaxConsecutiveFailures {
 		t.Errorf("MaxConsecutiveFailures: got %d, want %d", decoded.MaxConsecutiveFailures, original.MaxConsecutiveFailures)
 	}
@@ -95,7 +89,6 @@ func TestRuntimeConfig_JSONFieldNames(t *testing.T) {
 
 	// Check that JSON keys match the DESIGN.md GET /system/config response
 	expectedKeys := []string{
-		"user_agent",
 		"request_log_enabled",
 		"reverse_proxy_log_detail_enabled",
 		"reverse_proxy_log_req_headers_max_bytes",

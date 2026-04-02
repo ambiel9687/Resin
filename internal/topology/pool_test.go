@@ -490,14 +490,51 @@ func TestPool_PlatformLookupByIDAndName(t *testing.T) {
 	}
 }
 
-func TestPool_ResolveNodeDisplayTag_EarliestSubscriptionThenMinTag(t *testing.T) {
+func TestPool_ResolveNodeDisplayTag_PreferEarliestEnabledSubscriptionThenMinTag(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 
 	older := subscription.NewSubscription("sub-old", "Z-Provider", "url", true, false)
 	older.CreatedAtNs = 100
-	older.SetEnabled(false) // display-tag rule should not depend on enabled flag.
+	older.SetEnabled(false)
 
 	newer := subscription.NewSubscription("sub-new", "A-Provider", "url", true, false)
+	newer.CreatedAtNs = 200
+
+	subMgr.Register(older)
+	subMgr.Register(newer)
+
+	pool := newTestPool(subMgr)
+	raw := json.RawMessage(`{"type":"ss","server":"1.1.1.1"}`)
+	h := node.HashFromRawOptions(raw)
+
+	oldManaged := subscription.NewManagedNodes()
+	oldManaged.StoreNode(h, subscription.ManagedNode{Tags: []string{"zz", "aa"}})
+	older.SwapManagedNodes(oldManaged)
+
+	newManaged := subscription.NewManagedNodes()
+	newManaged.StoreNode(h, subscription.ManagedNode{Tags: []string{"00"}})
+	newer.SwapManagedNodes(newManaged)
+
+	pool.AddNodeFromSub(h, raw, older.ID)
+	pool.AddNodeFromSub(h, raw, newer.ID)
+
+	got := pool.ResolveNodeDisplayTag(h)
+	want := "A-Provider/00"
+	if got != want {
+		t.Fatalf("ResolveNodeDisplayTag = %q, want %q", got, want)
+	}
+
+	if v := pool.ResolveNodeDisplayTag(node.Zero); v != "" {
+		t.Fatalf("ResolveNodeDisplayTag(unknown) = %q, want empty", v)
+	}
+}
+
+func TestPool_ResolveNodeDisplayTag_AllDisabled_FallbackToLegacyRule(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+
+	older := subscription.NewSubscription("sub-old", "Z-Provider", "url", false, false)
+	older.CreatedAtNs = 100
+	newer := subscription.NewSubscription("sub-new", "A-Provider", "url", false, false)
 	newer.CreatedAtNs = 200
 
 	subMgr.Register(older)
@@ -523,9 +560,79 @@ func TestPool_ResolveNodeDisplayTag_EarliestSubscriptionThenMinTag(t *testing.T)
 	if got != want {
 		t.Fatalf("ResolveNodeDisplayTag = %q, want %q", got, want)
 	}
+}
 
-	if v := pool.ResolveNodeDisplayTag(node.Zero); v != "" {
-		t.Fatalf("ResolveNodeDisplayTag(unknown) = %q, want empty", v)
+func TestPool_IsNodeDisabled(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	disabled := subscription.NewSubscription("sub-disabled", "Disabled", "url", false, false)
+	enabled := subscription.NewSubscription("sub-enabled", "Enabled", "url", true, false)
+	subMgr.Register(disabled)
+	subMgr.Register(enabled)
+
+	pool := newTestPool(subMgr)
+	raw := json.RawMessage(`{"type":"ss","server":"1.1.1.1"}`)
+	h := node.HashFromRawOptions(raw)
+
+	disabledManaged := subscription.NewManagedNodes()
+	disabledManaged.StoreNode(h, subscription.ManagedNode{Tags: []string{"d-tag"}})
+	disabled.SwapManagedNodes(disabledManaged)
+
+	enabledManaged := subscription.NewManagedNodes()
+	enabledManaged.StoreNode(h, subscription.ManagedNode{Tags: []string{"e-tag"}})
+	enabled.SwapManagedNodes(enabledManaged)
+
+	pool.AddNodeFromSub(h, raw, disabled.ID)
+	pool.AddNodeFromSub(h, raw, enabled.ID)
+
+	if pool.IsNodeDisabled(h) {
+		t.Fatal("node should be enabled while at least one holder subscription is enabled")
+	}
+
+	enabled.SetEnabled(false)
+	if !pool.IsNodeDisabled(h) {
+		t.Fatal("node should be disabled when all holder subscriptions are disabled")
+	}
+}
+
+func TestPool_MakeHealthyAndEnabledEvaluator_ExcludesDisabledNodes(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	enabledSub := subscription.NewSubscription("sub-enabled", "Enabled", "url", true, false)
+	disabledSub := subscription.NewSubscription("sub-disabled", "Disabled", "url", false, false)
+	subMgr.Register(enabledSub)
+	subMgr.Register(disabledSub)
+
+	pool := newTestPool(subMgr)
+
+	healthyRaw := json.RawMessage(`{"type":"ss","server":"1.1.1.1"}`)
+	healthyHash := node.HashFromRawOptions(healthyRaw)
+	pool.AddNodeFromSub(healthyHash, healthyRaw, enabledSub.ID)
+	enabledSub.ManagedNodes().StoreNode(healthyHash, subscription.ManagedNode{Tags: []string{"healthy"}})
+	healthyEntry, ok := pool.GetEntry(healthyHash)
+	if !ok {
+		t.Fatal("healthy entry missing")
+	}
+	healthyOutbound := testutil.NewNoopOutbound()
+	healthyEntry.Outbound.Store(&healthyOutbound)
+	pool.RecordResult(healthyHash, true)
+
+	disabledRaw := json.RawMessage(`{"type":"ss","server":"2.2.2.2"}`)
+	disabledHash := node.HashFromRawOptions(disabledRaw)
+	pool.AddNodeFromSub(disabledHash, disabledRaw, disabledSub.ID)
+	disabledSub.ManagedNodes().StoreNode(disabledHash, subscription.ManagedNode{Tags: []string{"disabled"}})
+	disabledEntry, ok := pool.GetEntry(disabledHash)
+	if !ok {
+		t.Fatal("disabled entry missing")
+	}
+	disabledOutbound := testutil.NewNoopOutbound()
+	disabledEntry.Outbound.Store(&disabledOutbound)
+	pool.RecordResult(disabledHash, true)
+
+	isHealthyAndEnabled := pool.MakeHealthyAndEnabledEvaluator()
+	if !isHealthyAndEnabled(healthyEntry) {
+		t.Fatal("enabled healthy node should count as healthy")
+	}
+	if isHealthyAndEnabled(disabledEntry) {
+		t.Fatal("disabled node should not count as healthy")
 	}
 }
 

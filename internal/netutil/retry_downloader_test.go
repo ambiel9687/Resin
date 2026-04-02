@@ -3,6 +3,7 @@ package netutil
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -15,7 +16,42 @@ func (f downloaderFunc) Download(ctx context.Context, url string) ([]byte, error
 	return f(ctx, url)
 }
 
-func TestRetryDownloader_NoRetryOnHTTPStatusError(t *testing.T) {
+func TestRetryDownloader_RetryOnSelectedHTTPStatusError(t *testing.T) {
+	retryableStatusCodes := []int{403, 429, 500, 502, 503, 504}
+
+	for _, statusCode := range retryableStatusCodes {
+		t.Run(strconv.Itoa(statusCode), func(t *testing.T) {
+			var pickerCalls, proxyCalls int
+
+			r := &RetryDownloader{
+				Direct: downloaderFunc(func(_ context.Context, url string) ([]byte, error) {
+					return nil, &HTTPStatusError{StatusCode: statusCode, URL: url}
+				}),
+				NodePicker: func(_ string) (node.Hash, error) {
+					pickerCalls++
+					return node.HashFromRawOptions([]byte(`{"id":"retry-node"}`)), nil
+				},
+				ProxyFetch: func(_ context.Context, _ node.Hash, _ string) ([]byte, error) {
+					proxyCalls++
+					return []byte("proxy"), nil
+				},
+			}
+
+			body, err := r.Download(context.Background(), "https://example.com")
+			if err != nil {
+				t.Fatalf("expected proxy retry success, got %v", err)
+			}
+			if string(body) != "proxy" {
+				t.Fatalf("unexpected body %q", string(body))
+			}
+			if pickerCalls != 1 || proxyCalls != 1 {
+				t.Fatalf("expected single successful retry, got picker=%d proxy=%d", pickerCalls, proxyCalls)
+			}
+		})
+	}
+}
+
+func TestRetryDownloader_NoRetryOnNonRetryableHTTPStatusError(t *testing.T) {
 	var pickerCalls, proxyCalls int
 
 	r := &RetryDownloader{

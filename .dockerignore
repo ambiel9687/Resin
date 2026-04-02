@@ -7,3 +7,4 @@ webui/node_modules
 webui/dist
 .vscode
 *.log
+.data/

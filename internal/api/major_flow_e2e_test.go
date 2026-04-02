@@ -62,7 +62,6 @@ func newMajorFlowHarness(t *testing.T, subscriptionUserAgent string) *majorFlowH
 	runtimeCfg := &atomic.Pointer[config.RuntimeConfig]{}
 	cfg := config.NewDefaultRuntimeConfig()
 	cfg.RequestLogEnabled = true
-	cfg.UserAgent = subscriptionUserAgent
 	runtimeCfg.Store(cfg)
 
 	subMgr := topology.NewSubscriptionManager()

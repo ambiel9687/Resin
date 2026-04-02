@@ -346,7 +346,15 @@ export function PlatformPage() {
                 <label className="field-label" htmlFor="create-region">
                   {t("地区过滤规则（可选）")}
                 </label>
-                <Textarea id="create-region" rows={4} placeholder={t("每行一条，如 hk / us")} {...createForm.register("region_filters_text")} />
+                <Textarea
+                  id="create-region"
+                  rows={4}
+                  placeholder={t("每行一条，如 hk / us / !hk")}
+                  {...createForm.register("region_filters_text")}
+                />
+                <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                  {t("支持反选：以 ! 开头可排除地区（如 !hk）。可与正选混用，最终结果为“先正选再排除”。")}
+                </p>
               </div>
 
               <div className="detail-actions">

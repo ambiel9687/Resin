@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertTriangle, Clock3, Layers, ShieldCheck, Waypoints } from "lucide-react";
+import { Activity, AlertTriangle, Clock3, Layers, Link2, ShieldCheck, Waypoints } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Badge } from "../../components/ui/Badge";
 import { Card } from "../../components/ui/Card";
@@ -51,6 +52,7 @@ type TrendLineChartProps = {
   data: Array<Record<string, number | string>>;
   lines: TrendLineDefinition[];
   yTickFormatter?: (value: number) => string;
+  tooltipValueFormatter?: (value: number) => string;
   emptyText: string;
 };
 
@@ -124,10 +126,6 @@ function formatShortNumber(value: number): string {
   return `${Math.round(value)}`;
 }
 
-function formatPercentAxis(value: number): string {
-  return `${Math.round(value)}%`;
-}
-
 function formatLatency(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
     return "0ms";
@@ -137,6 +135,47 @@ function formatLatency(value: number): string {
     return `${seconds >= 10 ? seconds.toFixed(0) : seconds.toFixed(1)}s`;
   }
   return `${Math.round(value)}ms`;
+}
+
+function formatLeaseDuration(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0ms";
+  }
+
+  if (value < 1000) {
+    return `${Math.round(value)}ms`;
+  }
+
+  const english = isEnglishLocale(getCurrentLocale());
+  const wholeSeconds = Math.floor(value / 1000);
+  const days = Math.floor(wholeSeconds / 86_400);
+  const hours = Math.floor((wholeSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((wholeSeconds % 3_600) / 60);
+  const seconds = wholeSeconds % 60;
+
+  if (english) {
+    if (days > 0) {
+      return `${days}d ${hours}h`;
+    }
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+  }
+
+  if (days > 0) {
+    return `${days} 天 ${hours} 小时`;
+  }
+  if (hours > 0) {
+    return `${hours} 小时 ${minutes} 分钟`;
+  }
+  if (minutes > 0) {
+    return `${minutes} 分钟 ${seconds} 秒`;
+  }
+  return `${seconds} 秒`;
 }
 
 function formatClock(iso: string): string {
@@ -461,34 +500,6 @@ function TrendTooltipContent({ active, payload, label, lines, valueFormatter }: 
   );
 }
 
-function RequestQualityTooltipContent({ active, payload, label }: any) {
-  if (!active || !payload?.length) {
-    return null;
-  }
-
-  return (
-    <div className="trend-tooltip">
-      <p className="trend-tooltip-time">{label ?? "--"}</p>
-      <div className="trend-tooltip-list">
-        {payload.map((entry: any) => {
-          const isRate = entry.dataKey === "success_rate";
-          const valueStr = isRate ? `${Number(entry.value).toFixed(1)}%` : formatCount(Number(entry.value));
-
-          return (
-            <p key={entry.dataKey} className="trend-tooltip-row">
-              <span>
-                <i style={{ background: entry.color }} />
-                {entry.name}
-              </span>
-              <b>{valueStr}</b>
-            </p>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function HistogramTooltipContent({ active, payload }: any) {
   const { t } = useI18n();
 
@@ -519,12 +530,13 @@ function EmptyChart({ text }: { text: string }) {
   );
 }
 
-function TrendLineChart({ data, lines, yTickFormatter, emptyText }: TrendLineChartProps) {
+function TrendLineChart({ data, lines, yTickFormatter, tooltipValueFormatter, emptyText }: TrendLineChartProps) {
   if (!data.length || !lines.length) {
     return <EmptyChart text={emptyText} />;
   }
 
   const formatYAxis = yTickFormatter ?? formatShortNumber;
+  const formatTooltip = tooltipValueFormatter ?? formatYAxis;
 
   return (
     <div className="trend-chart">
@@ -553,7 +565,7 @@ function TrendLineChart({ data, lines, yTickFormatter, emptyText }: TrendLineCha
             <Tooltip
               cursor={{ stroke: "rgba(15, 94, 216, 0.34)", strokeWidth: 1 }}
               wrapperStyle={{ outline: "none" }}
-              content={<TrendTooltipContent lines={lines} valueFormatter={formatYAxis} />}
+              content={<TrendTooltipContent lines={lines} valueFormatter={formatTooltip} />}
             />
             {lines.map((line) => (
               <Line
@@ -569,88 +581,6 @@ function TrendLineChart({ data, lines, yTickFormatter, emptyText }: TrendLineCha
                 connectNulls
               />
             ))}
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function RequestQualityChart({
-  data,
-  emptyText,
-}: {
-  data: Array<{ label: string; total_requests: number; success_rate: number }>;
-  emptyText: string;
-}) {
-  const { t } = useI18n();
-
-  if (!data.length) {
-    return <EmptyChart text={emptyText} />;
-  }
-
-  return (
-    <div className="trend-chart">
-      <div className="trend-svg">
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 6, right: 8, bottom: 4, left: 8 }}>
-            <CartesianGrid stroke="rgba(65, 87, 121, 0.16)" strokeDasharray="2 4" vertical={false} />
-            <XAxis
-              dataKey="label"
-              interval="preserveStartEnd"
-              minTickGap={18}
-              tickMargin={4}
-              axisLine={false}
-              tickLine={false}
-              tick={{ fill: "#607191", fontSize: 11, fontWeight: 600 }}
-            />
-            <YAxis
-              yAxisId="left"
-              width="auto"
-              tickMargin={4}
-              axisLine={false}
-              tickLine={false}
-              tick={{ fill: "#657691", fontSize: 11, fontWeight: 600 }}
-              tickFormatter={(value) => formatShortNumber(toNumber(value))}
-              domain={[0, "auto"]}
-            />
-            <YAxis
-              yAxisId="right"
-              orientation="right"
-              width="auto"
-              tickMargin={4}
-              axisLine={false}
-              tickLine={false}
-              tick={{ fill: "#657691", fontSize: 11, fontWeight: 600 }}
-              tickFormatter={(value) => formatPercentAxis(toNumber(value))}
-              domain={[0, 100]}
-            />
-            <Tooltip
-              cursor={{ stroke: "rgba(15, 94, 216, 0.34)", strokeWidth: 1 }}
-              wrapperStyle={{ outline: "none" }}
-              content={<RequestQualityTooltipContent />}
-            />
-            <Bar
-              yAxisId="left"
-              dataKey="total_requests"
-              name={t("请求总数")}
-              fill="rgba(37, 108, 233, 0.76)"
-              radius={[4, 4, 0, 0]}
-              maxBarSize={24}
-              isAnimationActive={false}
-            />
-            <Line
-              yAxisId="right"
-              type="monotone"
-              dataKey="success_rate"
-              name={t("成功率")}
-              stroke="#0f9d8b"
-              strokeWidth={1.8}
-              dot={false}
-              activeDot={{ r: 3, stroke: "#ffffff", strokeWidth: 1, fill: "#0f9d8b" }}
-              isAnimationActive={false}
-              connectNulls
-            />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -873,7 +803,7 @@ export function PlatformMonitorPanel({ platform }: { platform: Platform }) {
     return downsampleArray(sortedRequestsItems, MAX_TREND_POINTS).map((item) => ({
       label: formatClock(item.bucket_start),
       total_requests: item.total_requests,
-      success_rate: item.success_rate * 100,
+      success_requests: item.success_requests,
     }));
   }, [sortedRequestsItems, locale]);
 
@@ -920,7 +850,7 @@ export function PlatformMonitorPanel({ platform }: { platform: Platform }) {
       <div className="platform-monitor-kpi-grid">
         <Card className="platform-monitor-kpi-card">
           <div className="dashboard-kpi-icon lease">
-            <Layers size={16} />
+            <Layers size={18} />
           </div>
           <div>
             <p className="platform-monitor-kpi-label">{t("活跃租约")}</p>
@@ -931,7 +861,7 @@ export function PlatformMonitorPanel({ platform }: { platform: Platform }) {
 
         <Card className="platform-monitor-kpi-card">
           <div className="dashboard-kpi-icon shield">
-            <ShieldCheck size={16} />
+            <ShieldCheck size={18} />
           </div>
           <div>
             <p className="platform-monitor-kpi-label">{t("请求成功率")}</p>
@@ -944,22 +874,26 @@ export function PlatformMonitorPanel({ platform }: { platform: Platform }) {
 
         <Card className="platform-monitor-kpi-card">
           <div className="dashboard-kpi-icon gauge">
-            <Waypoints size={16} />
+            <Waypoints size={18} />
           </div>
           <div>
             <p className="platform-monitor-kpi-label">{t("可路由节点")}</p>
             <p className="platform-monitor-kpi-value">{formatCount(snapshotNodePool?.routable_node_count ?? 0)}</p>
             <p className="platform-monitor-kpi-sub">{t("出口 IP")} {formatCount(snapshotNodePool?.egress_ip_count ?? 0)}</p>
           </div>
+          <Link to={`/nodes?platform_id=${encodeURIComponent(platform.id)}`} className="platform-monitor-kpi-link">
+            <Link2 size={14} />
+            <span>{t("可路由节点")}</span>
+          </Link>
         </Card>
 
         <Card className="platform-monitor-kpi-card">
           <div className="dashboard-kpi-icon waves">
-            <Clock3 size={16} />
+            <Clock3 size={18} />
           </div>
           <div>
             <p className="platform-monitor-kpi-label">{t("租约 P50 存活时长")}</p>
-            <p className="platform-monitor-kpi-value">{formatLatency(latestP50LeaseMs)}</p>
+            <p className="platform-monitor-kpi-value">{formatLeaseDuration(latestP50LeaseMs)}</p>
             <p className="platform-monitor-kpi-sub">{t("历史租约时长统计")}</p>
           </div>
         </Card>
@@ -981,25 +915,34 @@ export function PlatformMonitorPanel({ platform }: { platform: Platform }) {
 
         <Card className="dashboard-panel">
           <div className="dashboard-panel-header">
-            <h3>{t("请求质量")}</h3>
-            <p>{t("请求总量 + 成功率")}</p>
+            <h3>{t("请求统计")}</h3>
+            <p>{t("总请求数 / 成功请求数")}</p>
           </div>
-          <RequestQualityChart data={requestTrendData} emptyText={t("暂无请求统计数据")} />
+          <TrendLineChart
+            data={requestTrendData}
+            emptyText={t("暂无请求统计数据")}
+            yTickFormatter={formatShortNumber}
+            lines={[
+              { dataKey: "total_requests", name: t("总请求数"), color: "#2467e4" },
+              { dataKey: "success_requests", name: t("成功请求数"), color: "#0f9d8b" },
+            ]}
+          />
           <div className="dashboard-summary-inline">
             <span>{t("总请求")} {formatCount(totalRequests)}</span>
-            <span>{t("成功率")} {formatPercent(requestSuccessRatio)}</span>
+            <span>{t("成功请求")} {formatCount(successRequests)}</span>
           </div>
         </Card>
 
         <Card className="dashboard-panel">
           <div className="dashboard-panel-header">
             <h3>{t("租约存活分位趋势")}</h3>
-            <p>P1 / P5 / P50 (ms)</p>
+            <p>P1 / P5 / P50</p>
           </div>
           <TrendLineChart
             data={leaseLifetimeTrendData}
             emptyText={t("暂无租约生命周期数据")}
             yTickFormatter={formatLatency}
+            tooltipValueFormatter={formatLeaseDuration}
             lines={[
               { dataKey: "p1_ms", name: "P1", color: "#2d63d8" },
               { dataKey: "p5_ms", name: "P5", color: "#0f9d8b" },

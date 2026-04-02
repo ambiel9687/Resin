@@ -132,6 +132,50 @@ func TestGetLease_NodeTagUsesEarliestSubscriptionThenMinTag(t *testing.T) {
 	}
 }
 
+func TestGetLease_NodeTagPrefersEarliestEnabledSubscription(t *testing.T) {
+	cp, plat := newLeaseInheritanceTestService()
+
+	hash := node.HashFromRawOptions([]byte(`{"type":"ss","server":"198.51.100.11","port":443}`))
+	seedSharedNodeAcrossSubscriptions(
+		t,
+		cp,
+		hash,
+		"sub-old-disabled",
+		"Z-Provider",
+		100,
+		[]string{"zz", "aa"},
+		"sub-new-enabled",
+		"A-Provider",
+		200,
+		[]string{"00"},
+	)
+
+	old := cp.SubMgr.Lookup("sub-old-disabled")
+	if old == nil {
+		t.Fatal("old subscription not found")
+	}
+	old.SetEnabled(false)
+
+	now := time.Now().UnixNano()
+	seedLease(t, cp, model.Lease{
+		PlatformID:     plat.ID,
+		Account:        "carol",
+		NodeHash:       hash.Hex(),
+		EgressIP:       "203.0.113.12",
+		CreatedAtNs:    now - int64(time.Minute),
+		ExpiryNs:       now + int64(time.Minute),
+		LastAccessedNs: now,
+	})
+
+	got, err := cp.GetLease(plat.ID, "carol")
+	if err != nil {
+		t.Fatalf("GetLease: %v", err)
+	}
+	if got.NodeTag != "A-Provider/00" {
+		t.Fatalf("node_tag: got %q, want %q", got.NodeTag, "A-Provider/00")
+	}
+}
+
 func TestListLeases_NodeTagUsesEarliestSubscriptionThenMinTag(t *testing.T) {
 	cp, plat := newLeaseInheritanceTestService()
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"time"
@@ -320,7 +321,9 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	transport := p.outboundHTTPTransport(routed)
 	outReq := prepareForwardOutboundRequest(r)
-	lifecycle.addEgressBytes(headerWireLen(outReq.Header))
+	upstreamTrace := newUpstreamRequestTrace()
+	outReq = outReq.WithContext(httptrace.WithClientTrace(outReq.Context(), upstreamTrace.clientTrace()))
+	pendingEgressHeaderBytes := headerWireLen(outReq.Header)
 	var egressBodyCounter *countingReadCloser
 	if outReq.Body != nil && outReq.Body != http.NoBody {
 		egressBodyCounter = newCountingReadCloser(outReq.Body)
@@ -329,8 +332,11 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Forward the request.
 	resp, err := transport.RoundTrip(outReq)
-	if egressBodyCounter != nil {
-		lifecycle.addEgressBytes(egressBodyCounter.Total())
+	if upstreamTrace.shouldCommitEgress() {
+		lifecycle.addEgressBytes(pendingEgressHeaderBytes)
+		if egressBodyCounter != nil {
+			lifecycle.addEgressBytes(egressBodyCounter.Total())
+		}
 	}
 	if err != nil {
 		proxyErr := classifyUpstreamError(err)
