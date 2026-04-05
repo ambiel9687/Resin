@@ -43,7 +43,7 @@ type topologyRuntime struct {
 	singboxBuilder   *outbound.SingboxBuilder // for Close on shutdown
 }
 
-const downloadUserAgent = "Go-http-client/1.1"
+const downloadUserAgent = "clash.meta"
 
 func main() {
 	if err := run(); err != nil {
